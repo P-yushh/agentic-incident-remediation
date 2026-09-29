@@ -37,10 +37,27 @@ Automated tests use deterministic model doubles and do not consume hosted-model 
 - Strict Pydantic contracts for incidents, plans, generated artifacts, validation results,
   approvals, messages, and workflow state
 - Immutable state-update helpers with explicit transition validation
+- Alert normalization for provider-shaped Kubernetes and Terraform incidents
+- A LangGraph planning workflow with explicit success and safe-failure routes
+- Schema-constrained remediation planning through a provider-neutral model interface
+- A Hugging Face router adapter plus deterministic offline model doubles
 - Environment-based configuration for Redis and Hugging Face inference
 - JSON structured logging
 - Redis development service
 
-The LangGraph workflow, MCP services, validation sandbox, approval API, and demonstration UI
-will be added incrementally.
+The graph currently stops at the `generating` boundary after producing a validated plan. Artifact
+generation, MCP services, validation sandbox, approval API, and demonstration UI will be added
+incrementally.
 
+## Planning workflow
+
+```text
+raw alert -> normalize incident -> prepare planning -> planner
+                                                   |-- valid plan -> generating boundary
+                                                   `-- invalid output -> failed safely
+```
+
+Automated tests use `FakeStructuredModel`; they never call Hugging Face. A live demonstration can
+construct `HuggingFaceStructuredModel.from_settings(get_settings())` after setting `HF_TOKEN`.
+The live adapter requests JSON output constrained by the `RemediationPlan` schema and does not
+execute or apply the proposed infrastructure changes.
