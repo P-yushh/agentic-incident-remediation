@@ -18,6 +18,12 @@ from agentic_incident_remediation.models import (
     MessageRole,
     WorkflowStatus,
 )
+from agentic_incident_remediation.schema_tools.errors import SchemaToolError
+from agentic_incident_remediation.schema_tools.selection import (
+    LocalSchemaToolProvider,
+    SchemaToolProvider,
+    schema_context_for_incident,
+)
 from agentic_incident_remediation.state import add_artifact, add_message, transition_state
 
 _KUBERNETES_INCIDENTS = {
@@ -43,16 +49,24 @@ def artifact_kind_for_incident(incident_type: IncidentType) -> ArtifactKind:
 class GeneratorNode:
     """Generate a typed artifact and stop safely when model output is unusable."""
 
-    def __init__(self, model: StructuredModel) -> None:
+    def __init__(
+        self,
+        model: StructuredModel,
+        schema_tools: SchemaToolProvider | None = None,
+    ) -> None:
         self._model = model
+        self._schema_tools = schema_tools or LocalSchemaToolProvider()
 
     def __call__(self, state: AgentState) -> dict[str, Any]:
         if state.status is not WorkflowStatus.GENERATING or state.plan is None:
             raise ValueError("generator node requires generating status and a remediation plan")
 
         expected_kind = artifact_kind_for_incident(state.incident.type)
-        system_prompt, user_prompt = build_generator_prompts(state, expected_kind)
         try:
+            schema_context = schema_context_for_incident(state.incident, self._schema_tools)
+            system_prompt, user_prompt = build_generator_prompts(
+                state, expected_kind, schema_context
+            )
             draft = self._model.generate_structured(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
@@ -64,7 +78,7 @@ class GeneratorNode:
                 )
             previous = latest_artifact(state.artifacts, expected_kind)
             artifact = materialize_artifact(draft, previous=previous)
-        except (ModelGatewayError, ArtifactRevisionError) as error:
+        except (ModelGatewayError, ArtifactRevisionError, SchemaToolError) as error:
             reason = f"generator could not produce a valid remediation artifact: {error}"
             failed = transition_state(state, WorkflowStatus.FAILED, failure_reason=reason)
             failed = add_message(

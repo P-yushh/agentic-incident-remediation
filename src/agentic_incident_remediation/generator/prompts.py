@@ -1,6 +1,7 @@
 """Prompts for producing proposed Kubernetes and Terraform artifacts."""
 
 from agentic_incident_remediation.models import AgentState, ArtifactKind
+from agentic_incident_remediation.schema_tools.models import SchemaDocument
 
 GENERATOR_SYSTEM_PROMPT = """You are the code-generation component of a safety-first
 infrastructure remediation system. Return exactly one artifact matching the supplied JSON schema.
@@ -9,7 +10,11 @@ kubectl apply, terraform apply, terraform destroy, credentials, or secret values
 the remediations directory and make the smallest reversible change described by the plan."""
 
 
-def build_generator_prompts(state: AgentState, expected_kind: ArtifactKind) -> tuple[str, str]:
+def build_generator_prompts(
+    state: AgentState,
+    expected_kind: ArtifactKind,
+    schema_context: SchemaDocument | None = None,
+) -> tuple[str, str]:
     """Build a deterministic generation prompt including correction context when present."""
 
     if state.plan is None:
@@ -23,6 +28,11 @@ def build_generator_prompts(state: AgentState, expected_kind: ArtifactKind) -> t
         f"Incident:\n{state.incident.model_dump_json(indent=2)}",
         f"Plan:\n{state.plan.model_dump_json(indent=2)}",
     ]
+    if schema_context is not None:
+        sections.append(
+            "Read-only infrastructure schema context returned by the selected MCP tool:\n"
+            f"{schema_context.model_dump_json(indent=2)}"
+        )
     if state.artifacts:
         previous = state.artifacts[-1]
         sections.append(
