@@ -44,22 +44,28 @@ Automated tests use deterministic model doubles and do not consume hosted-model 
 - Repository-confined paths, execution-command guards, checksums, and linked revisions
 - A read-only MCP schema server with typed Kubernetes and Terraform discovery tools
 - Incident-aware schema tool selection that grounds generator prompts before code generation
+- Locked-down Docker validation for Kubernetes and Terraform artifacts
+- Structured validator findings with explicit pass, reflection, and runtime-failure routes
 - A Hugging Face router adapter plus deterministic offline model doubles
 - Environment-based configuration for Redis and Hugging Face inference
 - JSON structured logging
 - Redis development service
 
-The graph currently stops at the `validating` boundary after producing a typed, revisioned
-artifact grounded by read-only infrastructure schema context. The isolated validation sandbox,
-approval API, and demonstration UI will be added incrementally.
+The full graph currently stops after isolated validation: valid artifacts reach the future approval
+boundary, invalid artifacts reach the future reflection boundary, and sandbox infrastructure errors
+fail safely. The reflection loop, approval API, and demonstration UI will be added incrementally.
 
 ## Planning workflow
 
 ```text
 raw alert -> normalize incident -> prepare planning -> planner -> generator
-                                                   |              |-- valid artifact -> validating
+                                                   |              |-- valid artifact -> validator
                                                    |              `-- unsafe output -> failed safely
                                                    `-- invalid plan -> failed safely
+
+validator -> passed -> awaiting approval boundary
+          |-- invalid artifact -> reflection boundary
+          `-- sandbox error -> failed safely
 ```
 
 Automated tests use `FakeStructuredModel`; they never call Hugging Face. A live demonstration can
@@ -86,3 +92,23 @@ agentic-remediation-schema-mcp
 The checked-in catalog is intentionally limited to the resource types used by the synthetic demo.
 It reads no cluster, cloud account, filesystem, or credentials. Unknown resource requests fail
 closed, and returned schema context still requires the separate sandbox validation stage.
+
+## Isolated validation
+
+Build the pinned local validator images before using the live Docker runner:
+
+```bash
+docker build -t agentic-remediation/kubeconform-validator:0.1.0 \
+  sandbox/kubeconform-validator
+docker build -t agentic-remediation/terraform-validator:0.1.0 \
+  sandbox/terraform-validator
+```
+
+The runner sends artifact content through standard input and never mounts the repository, Docker
+socket, credentials, or home directory. Runtime containers have networking disabled, a read-only
+root filesystem, an ephemeral 16 MiB `/tmp`, dropped capabilities, `no-new-privileges`, an
+unprivileged user, and CPU, memory, process, and timeout limits. Kubernetes validation uses
+Kubeconform with a bundled schema. Terraform validation uses a bundled AWS provider and runs
+`terraform init -backend=false` followed by `terraform validate -json`; it never plans or applies.
+
+Automated tests use `FakeSandboxRunner`, so CI does not require Docker or download validator images.

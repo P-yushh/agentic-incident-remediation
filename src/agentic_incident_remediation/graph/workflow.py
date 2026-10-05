@@ -15,10 +15,12 @@ from agentic_incident_remediation.models import (
     AgentState,
     Incident,
     MessageRole,
+    ValidationStatus,
     WorkflowStatus,
 )
 from agentic_incident_remediation.models.base import utc_now
 from agentic_incident_remediation.planner import PlannerNode
+from agentic_incident_remediation.sandbox import SandboxRunner, ValidatorNode
 from agentic_incident_remediation.schema_tools.selection import SchemaToolProvider
 
 
@@ -33,6 +35,14 @@ class GeneratorRoute(StrEnum):
     """Deterministic exits from the artifact generator."""
 
     VALIDATION_READY = "validation_ready"
+    FAILED = "failed"
+
+
+class ValidatorRoute(StrEnum):
+    """Deterministic exits from isolated artifact validation."""
+
+    APPROVAL_READY = "approval_ready"
+    REFLECTION_READY = "reflection_ready"
     FAILED = "failed"
 
 
@@ -71,6 +81,32 @@ def route_after_generator(state: AgentState) -> GeneratorRoute:
     if state.status is WorkflowStatus.FAILED:
         return GeneratorRoute.FAILED
     raise ValueError("generator produced an unroutable workflow state")
+
+
+def route_after_validator(state: AgentState) -> ValidatorRoute:
+    """Route validated artifacts to the next unimplemented workflow boundary."""
+
+    if state.status is WorkflowStatus.FAILED:
+        return ValidatorRoute.FAILED
+    if not state.artifacts:
+        raise ValueError("validator routing requires an artifact")
+    artifact_id = state.artifacts[-1].id
+    current_results = tuple(
+        result for result in state.validation_results if result.artifact_id == artifact_id
+    )
+    if (
+        state.status is WorkflowStatus.AWAITING_APPROVAL
+        and current_results
+        and all(result.status is ValidationStatus.PASSED for result in current_results)
+    ):
+        return ValidatorRoute.APPROVAL_READY
+    if (
+        state.status is WorkflowStatus.REFLECTING
+        and any(result.status is ValidationStatus.FAILED for result in current_results)
+        and state.validation_errors
+    ):
+        return ValidatorRoute.REFLECTION_READY
+    raise ValueError("validator produced an unroutable workflow state")
 
 
 def build_planner_graph(
@@ -129,6 +165,52 @@ def build_generation_graph(
     return builder.compile(name="incident-remediation-generation")
 
 
+def build_validation_graph(
+    planner_model: StructuredModel,
+    sandbox_runner: SandboxRunner,
+    generator_model: StructuredModel | None = None,
+    *,
+    schema_tools: SchemaToolProvider | None = None,
+) -> CompiledStateGraph[AgentState, Any, AgentState, AgentState]:
+    """Compile the workflow through isolated validation and stop at the next boundary."""
+
+    builder = StateGraph(AgentState)
+    builder.add_node("prepare_planning", prepare_planning)
+    builder.add_node("planner", PlannerNode(planner_model))
+    builder.add_node(
+        "generator", GeneratorNode(generator_model or planner_model, schema_tools=schema_tools)
+    )
+    builder.add_node("validator", ValidatorNode(sandbox_runner))
+    builder.add_edge(START, "prepare_planning")
+    builder.add_edge("prepare_planning", "planner")
+    builder.add_conditional_edges(
+        "planner",
+        route_after_planner,
+        {
+            PlannerRoute.GENERATION_READY: "generator",
+            PlannerRoute.FAILED: END,
+        },
+    )
+    builder.add_conditional_edges(
+        "generator",
+        route_after_generator,
+        {
+            GeneratorRoute.VALIDATION_READY: "validator",
+            GeneratorRoute.FAILED: END,
+        },
+    )
+    builder.add_conditional_edges(
+        "validator",
+        route_after_validator,
+        {
+            ValidatorRoute.APPROVAL_READY: END,
+            ValidatorRoute.REFLECTION_READY: END,
+            ValidatorRoute.FAILED: END,
+        },
+    )
+    return builder.compile(name="incident-remediation-validation")
+
+
 class PlannerWorkflow:
     """Public entry point that normalizes alert payloads before invoking LangGraph."""
 
@@ -156,6 +238,33 @@ class RemediationWorkflow:
     ) -> None:
         self._graph = build_generation_graph(
             planner_model,
+            generator_model,
+            schema_tools=schema_tools,
+        )
+        self._max_retries = max_retries
+
+    def invoke(self, alert: Incident | Mapping[str, Any]) -> AgentState:
+        incident = normalize_incident(alert)
+        initial_state = AgentState(incident=incident, max_retries=self._max_retries)
+        result = self._graph.invoke(initial_state)
+        return AgentState.model_validate(result)
+
+
+class SandboxedRemediationWorkflow:
+    """Workflow entry point that stops after isolated artifact validation."""
+
+    def __init__(
+        self,
+        planner_model: StructuredModel,
+        sandbox_runner: SandboxRunner,
+        generator_model: StructuredModel | None = None,
+        *,
+        schema_tools: SchemaToolProvider | None = None,
+        max_retries: int = 3,
+    ) -> None:
+        self._graph = build_validation_graph(
+            planner_model,
+            sandbox_runner,
             generator_model,
             schema_tools=schema_tools,
         )

@@ -103,7 +103,8 @@ def record_validation(state: AgentState, result: ValidationResult) -> AgentState
 
     errors = state.validation_errors
     if result.status is not ValidationStatus.PASSED:
-        message = result.stderr.strip() or f"{result.tool} validation failed"
+        finding_messages = "; ".join(finding.message for finding in result.findings)
+        message = finding_messages or result.stderr.strip() or f"{result.tool} validation failed"
         errors = (*errors, message)
 
     return state.model_copy(
