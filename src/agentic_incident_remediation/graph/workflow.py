@@ -20,6 +20,7 @@ from agentic_incident_remediation.models import (
 )
 from agentic_incident_remediation.models.base import utc_now
 from agentic_incident_remediation.planner import PlannerNode
+from agentic_incident_remediation.reflector import ReflectorNode
 from agentic_incident_remediation.sandbox import SandboxRunner, ValidatorNode
 from agentic_incident_remediation.schema_tools.selection import SchemaToolProvider
 
@@ -43,6 +44,13 @@ class ValidatorRoute(StrEnum):
 
     APPROVAL_READY = "approval_ready"
     REFLECTION_READY = "reflection_ready"
+    FAILED = "failed"
+
+
+class ReflectorRoute(StrEnum):
+    """Deterministic exits from bounded validation reflection."""
+
+    GENERATION_READY = "generation_ready"
     FAILED = "failed"
 
 
@@ -107,6 +115,20 @@ def route_after_validator(state: AgentState) -> ValidatorRoute:
     ):
         return ValidatorRoute.REFLECTION_READY
     raise ValueError("validator produced an unroutable workflow state")
+
+
+def route_after_reflector(state: AgentState) -> ReflectorRoute:
+    """Route a bounded retry to generation or stop after ceiling exhaustion."""
+
+    if (
+        state.status is WorkflowStatus.GENERATING
+        and state.retry_count > 0
+        and state.validation_errors
+    ):
+        return ReflectorRoute.GENERATION_READY
+    if state.status is WorkflowStatus.FAILED:
+        return ReflectorRoute.FAILED
+    raise ValueError("reflector produced an unroutable workflow state")
 
 
 def build_planner_graph(
@@ -211,6 +233,61 @@ def build_validation_graph(
     return builder.compile(name="incident-remediation-validation")
 
 
+def build_reflection_graph(
+    planner_model: StructuredModel,
+    sandbox_runner: SandboxRunner,
+    generator_model: StructuredModel | None = None,
+    *,
+    schema_tools: SchemaToolProvider | None = None,
+) -> CompiledStateGraph[AgentState, Any, AgentState, AgentState]:
+    """Compile planning, generation, validation, and bounded self-correction."""
+
+    builder = StateGraph(AgentState)
+    builder.add_node("prepare_planning", prepare_planning)
+    builder.add_node("planner", PlannerNode(planner_model))
+    builder.add_node(
+        "generator", GeneratorNode(generator_model or planner_model, schema_tools=schema_tools)
+    )
+    builder.add_node("validator", ValidatorNode(sandbox_runner))
+    builder.add_node("reflector", ReflectorNode())
+    builder.add_edge(START, "prepare_planning")
+    builder.add_edge("prepare_planning", "planner")
+    builder.add_conditional_edges(
+        "planner",
+        route_after_planner,
+        {
+            PlannerRoute.GENERATION_READY: "generator",
+            PlannerRoute.FAILED: END,
+        },
+    )
+    builder.add_conditional_edges(
+        "generator",
+        route_after_generator,
+        {
+            GeneratorRoute.VALIDATION_READY: "validator",
+            GeneratorRoute.FAILED: END,
+        },
+    )
+    builder.add_conditional_edges(
+        "validator",
+        route_after_validator,
+        {
+            ValidatorRoute.APPROVAL_READY: END,
+            ValidatorRoute.REFLECTION_READY: "reflector",
+            ValidatorRoute.FAILED: END,
+        },
+    )
+    builder.add_conditional_edges(
+        "reflector",
+        route_after_reflector,
+        {
+            ReflectorRoute.GENERATION_READY: "generator",
+            ReflectorRoute.FAILED: END,
+        },
+    )
+    return builder.compile(name="incident-remediation-reflection")
+
+
 class PlannerWorkflow:
     """Public entry point that normalizes alert payloads before invoking LangGraph."""
 
@@ -274,4 +351,34 @@ class SandboxedRemediationWorkflow:
         incident = normalize_incident(alert)
         initial_state = AgentState(incident=incident, max_retries=self._max_retries)
         result = self._graph.invoke(initial_state)
+        return AgentState.model_validate(result)
+
+
+class SelfCorrectingRemediationWorkflow:
+    """Workflow entry point with bounded validation-driven artifact correction."""
+
+    def __init__(
+        self,
+        planner_model: StructuredModel,
+        sandbox_runner: SandboxRunner,
+        generator_model: StructuredModel | None = None,
+        *,
+        schema_tools: SchemaToolProvider | None = None,
+        max_retries: int = 3,
+    ) -> None:
+        self._graph = build_reflection_graph(
+            planner_model,
+            sandbox_runner,
+            generator_model,
+            schema_tools=schema_tools,
+        )
+        self._max_retries = max_retries
+
+    def invoke(self, alert: Incident | Mapping[str, Any]) -> AgentState:
+        incident = normalize_incident(alert)
+        initial_state = AgentState(incident=incident, max_retries=self._max_retries)
+        result = self._graph.invoke(
+            initial_state,
+            config={"recursion_limit": 10 + self._max_retries * 4},
+        )
         return AgentState.model_validate(result)
