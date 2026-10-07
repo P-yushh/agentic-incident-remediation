@@ -46,14 +46,17 @@ Automated tests use deterministic model doubles and do not consume hosted-model 
 - Incident-aware schema tool selection that grounds generator prompts before code generation
 - Locked-down Docker validation for Kubernetes and Terraform artifacts
 - Structured validator findings with explicit pass, reflection, and runtime-failure routes
+- Deterministic reflection that turns validation findings into bounded, linked artifact revisions
+- A configurable retry ceiling that fails safely instead of looping indefinitely
 - A Hugging Face router adapter plus deterministic offline model doubles
 - Environment-based configuration for Redis and Hugging Face inference
 - JSON structured logging
 - Redis development service
 
-The full graph currently stops after isolated validation: valid artifacts reach the future approval
-boundary, invalid artifacts reach the future reflection boundary, and sandbox infrastructure errors
-fail safely. The reflection loop, approval API, and demonstration UI will be added incrementally.
+The full graph now retries invalid artifacts through a bounded reflection loop. Valid artifacts reach
+the future approval boundary, exhausted retries and sandbox infrastructure errors fail safely, and
+every correction remains linked to the artifact revision that preceded it. The approval API and
+demonstration UI will be added incrementally.
 
 ## Planning workflow
 
@@ -64,7 +67,8 @@ raw alert -> normalize incident -> prepare planning -> planner -> generator
                                                    `-- invalid plan -> failed safely
 
 validator -> passed -> awaiting approval boundary
-          |-- invalid artifact -> reflection boundary
+          |-- invalid artifact -> reflector -> retry available -> generator
+          |                              `-- retry ceiling -> failed safely
           `-- sandbox error -> failed safely
 ```
 
@@ -74,7 +78,9 @@ The live adapter requests JSON output constrained by the `RemediationPlan` and `
 schemas and does not execute or apply the proposed infrastructure changes.
 
 Generated files are proposals only. They must remain inside `remediations/`, use a format matching
-their incident type, and pass the future sandbox validation layer before human review.
+their incident type, and pass sandbox validation before human review. Reflection itself is
+deterministic and makes no model request; only the generator requests a corrected artifact using
+the previous revision and the validator's structured feedback.
 
 ## Schema MCP server
 
