@@ -39,3 +39,20 @@ class ApprovalRecord(StrictModel):
         ):
             raise ValueError("completed approval requires decided_at and decided_by")
         return self
+
+
+class ApprovalResponse(StrictModel):
+    """Human decision used to resume a persisted approval interrupt."""
+
+    approval_id: UUID
+    decision: ApprovalDecision
+    decided_by: str = Field(min_length=1, max_length=200)
+    comment: str | None = Field(default=None, max_length=2000)
+
+    @model_validator(mode="after")
+    def decision_must_be_final(self) -> "ApprovalResponse":
+        """A resume command must approve or reject, never remain pending."""
+
+        if self.decision is ApprovalDecision.PENDING:
+            raise ValueError("approval response must approve or reject the proposal")
+        return self
