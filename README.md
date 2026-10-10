@@ -3,7 +3,7 @@
 A safety-first multi-agent workflow that turns infrastructure incidents into validated,
 human-approved remediation pull requests.
 
-The system will accept incident alerts, plan a remediation, generate Kubernetes or Terraform
+The system accepts incident alerts, plans a remediation, generates Kubernetes or Terraform
 artifacts, validate them in isolated containers, correct failures through a bounded reflection
 loop, and pause for human approval before creating a GitHub pull request.
 
@@ -48,15 +48,19 @@ Automated tests use deterministic model doubles and do not consume hosted-model 
 - Structured validator findings with explicit pass, reflection, and runtime-failure routes
 - Deterministic reflection that turns validation findings into bounded, linked artifact revisions
 - A configurable retry ceiling that fails safely instead of looping indefinitely
+- Redis-backed LangGraph checkpoints keyed by execution ID, with state restoration and history
+- A durable native interrupt that pauses until a matching human approval or rejection arrives
+- An idempotent GitHub publisher restricted to branches, one generated artifact, and pull requests
 - A Hugging Face router adapter plus deterministic offline model doubles
-- Environment-based configuration for Redis and Hugging Face inference
+- Environment-based configuration for Redis, Hugging Face inference, and GitHub operations
 - JSON structured logging
 - Redis development service
 
-The full graph now retries invalid artifacts through a bounded reflection loop. Valid artifacts reach
-the future approval boundary, exhausted retries and sandbox infrastructure errors fail safely, and
-every correction remains linked to the artifact revision that preceded it. The approval API and
-demonstration UI will be added incrementally.
+The full graph retries invalid artifacts through a bounded reflection loop and checkpoints every
+node boundary. A valid artifact creates a stable approval request and durably interrupts execution.
+Approval resumes the same execution and can create a pull request; rejection exits without a
+repository write. Exhausted retries, sandbox errors, and repository failures terminate safely. The
+API and demonstration UI will be added incrementally.
 
 ## Planning workflow
 
@@ -66,10 +70,13 @@ raw alert -> normalize incident -> prepare planning -> planner -> generator
                                                    |              `-- unsafe output -> failed safely
                                                    `-- invalid plan -> failed safely
 
-validator -> passed -> awaiting approval boundary
+validator -> passed -> persisted human approval interrupt
           |-- invalid artifact -> reflector -> retry available -> generator
           |                              `-- retry ceiling -> failed safely
           `-- sandbox error -> failed safely
+
+approval -> rejected -> stop without repository changes
+         `-- approved -> publish validated artifact branch -> create pull request -> completed
 ```
 
 Automated tests use `FakeStructuredModel`; they never call Hugging Face. A live demonstration can
@@ -81,6 +88,32 @@ Generated files are proposals only. They must remain inside `remediations/`, use
 their incident type, and pass sandbox validation before human review. Reflection itself is
 deterministic and makes no model request; only the generator requests a corrected artifact using
 the previous revision and the validator's structured feedback.
+
+## Persistence and human approval
+
+`create_redis_checkpointer()` initializes the indices used by LangGraph before a workflow is
+compiled. The development service uses Redis 8, which includes the JSON and search capabilities
+required by the Redis checkpointer. An execution UUID is also its checkpoint thread ID, allowing a
+new process to restore the latest state or inspect prior snapshots.
+
+`DurableApprovalWorkflow.start()` runs until LangGraph's native `interrupt()` pauses at human
+review. `resume()` requires the pending approval UUID, a final approve/reject decision, and reviewer
+identity. A mismatched or stale approval UUID is rejected before execution resumes.
+
+For offline demonstrations and tests, `InMemorySaver` and `FakePullRequestPublisher` provide the
+same workflow behavior without Redis, GitHub, or hosted-model calls.
+
+## Approved repository operations
+
+The live `GitHubPullRequestPublisher` requires `GITHUB_TOKEN` and performs only these operations:
+
+1. Reuse an existing pull request for the execution branch when present.
+2. Create a deterministic remediation branch from the configured base branch.
+3. Commit the validated artifact under `remediations/`.
+4. Open a pull request containing the validation and approval audit context.
+
+The publisher refuses to overwrite conflicting branch content. It has no Kubernetes, Terraform,
+shell, deployment, merge, or production-apply capability.
 
 ## Schema MCP server
 
