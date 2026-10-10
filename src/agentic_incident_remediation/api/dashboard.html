@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Incident Remediation Console</title>
+    <style>
+      :root { color-scheme: dark; font-family: Inter, system-ui, sans-serif; background: #08111f; color: #e7eef9; }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100vh; background: radial-gradient(circle at 15% 0%, #17335a 0, #08111f 38%); }
+      main { width: min(1120px, 92vw); margin: 0 auto; padding: 54px 0 80px; }
+      .eyebrow { color: #61dafb; letter-spacing: .14em; text-transform: uppercase; font-size: .75rem; font-weight: 700; }
+      h1 { font-size: clamp(2rem, 5vw, 4.5rem); max-width: 800px; margin: 12px 0; line-height: 1; }
+      .lede { color: #aabbd1; max-width: 720px; font-size: 1.05rem; }
+      .grid { display: grid; grid-template-columns: minmax(300px, .8fr) minmax(360px, 1.2fr); gap: 22px; margin-top: 36px; }
+      .card { background: rgba(10, 25, 44, .9); border: 1px solid #25415f; border-radius: 18px; padding: 24px; box-shadow: 0 20px 60px #02070d66; }
+      label { display: block; margin: 14px 0 6px; color: #b9c7d8; font-size: .86rem; }
+      input, textarea, select, button { width: 100%; border-radius: 9px; border: 1px solid #36516f; padding: 11px 12px; font: inherit; }
+      input, textarea, select { color: #edf5ff; background: #091523; }
+      textarea { min-height: 90px; resize: vertical; }
+      button { margin-top: 16px; color: #06121f; background: #61dafb; border: 0; font-weight: 750; cursor: pointer; }
+      button.secondary { color: #e8eff9; background: #24364b; }
+      button.danger { color: white; background: #a93d52; }
+      button:disabled { opacity: .45; cursor: not-allowed; }
+      .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+      .status { display: inline-flex; padding: 7px 11px; border-radius: 999px; background: #162a40; color: #8ee6a8; font-family: ui-monospace, monospace; }
+      pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #06101c; border-radius: 10px; padding: 16px; min-height: 260px; color: #cbd8e8; }
+      .muted { color: #8497ad; }
+      a { color: #61dafb; }
+      @media (max-width: 780px) { .grid { grid-template-columns: 1fr; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="eyebrow">Safety-first infrastructure automation</div>
+      <h1>Incident Remediation Console</h1>
+      <p class="lede">Simulate an incident, inspect the validated proposal, and make the human decision that gates pull-request creation. Nothing is applied to infrastructure.</p>
+      <section class="grid">
+        <form id="incident-form" class="card">
+          <h2>Simulate incident</h2>
+          <label for="type">Incident type</label>
+          <select id="type"><option value="kubernetes_oom_killed">Kubernetes OOMKilled</option><option value="kubernetes_crash_loop">Kubernetes CrashLoop</option><option value="terraform_drift">Terraform drift</option></select>
+          <label for="title">Title</label>
+          <input id="title" value="Payment API pod exceeded its memory limit" required>
+          <label for="description">Description</label>
+          <textarea id="description" required>The payment-api container restarted after exceeding its configured memory limit.</textarea>
+          <button type="submit">Generate remediation proposal</button>
+          <p class="muted" id="message">Ready for a deterministic or live demonstration.</p>
+        </form>
+        <section class="card" aria-live="polite">
+          <span class="status" id="status">not started</span>
+          <h2 id="execution">Execution details</h2>
+          <pre id="artifact">The generated artifact and validation result will appear here.</pre>
+          <div class="actions">
+            <button id="approve" disabled>Approve pull request</button>
+            <button id="reject" class="danger" disabled>Reject proposal</button>
+          </div>
+          <p id="result"></p>
+        </section>
+      </section>
+    </main>
+    <script>
+      const view = { executionId: null, approvalId: null, stream: null };
+      const byId = (id) => document.getElementById(id);
+      function render(state) {
+        view.executionId = state.execution_id;
+        view.approvalId = state.approval?.id || null;
+        byId('status').textContent = state.status;
+        byId('execution').textContent = `Execution ${state.execution_id.slice(0, 8)}`;
+        const latest = state.artifacts.at(-1);
+        const validation = state.validation_results.at(-1);
+        byId('artifact').textContent = latest ? `${latest.path}\n\n${latest.content}\n\nValidation: ${validation?.status || 'pending'}` : 'No artifact generated.';
+        const pending = state.status === 'awaiting_approval';
+        byId('approve').disabled = !pending;
+        byId('reject').disabled = !pending;
+        byId('result').textContent = state.pull_request ? `Pull request: ${state.pull_request.url}` : (state.failure_reason || '');
+      }
+      async function jsonRequest(url, options = {}) {
+        const response = await fetch(url, { headers: { 'content-type': 'application/json' }, ...options });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.detail || 'Request failed');
+        return payload;
+      }
+      byId('incident-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        byId('message').textContent = 'Planning and validating proposal…';
+        try {
+          const state = await jsonRequest('/api/incidents', { method: 'POST', body: JSON.stringify({ type: byId('type').value, title: byId('title').value, description: byId('description').value, severity: 'high', source: 'demo-console' }) });
+          render(state);
+          byId('message').textContent = 'Proposal is ready for human review.';
+          view.stream?.close();
+          view.stream = new EventSource(`/api/executions/${state.execution_id}/events`);
+          view.stream.addEventListener('state', (message) => render(JSON.parse(message.data)));
+        } catch (error) { byId('message').textContent = error.message; }
+      });
+      async function decide(decision) {
+        if (!view.executionId || !view.approvalId) return;
+        try {
+          const state = await jsonRequest(`/api/executions/${view.executionId}/approval`, { method: 'POST', body: JSON.stringify({ approval_id: view.approvalId, decision, decided_by: 'interview-demo-reviewer', comment: `${decision} from demonstration console` }) });
+          render(state);
+          view.stream?.close();
+        } catch (error) { byId('result').textContent = error.message; }
+      }
+      byId('approve').addEventListener('click', () => decide('approved'));
+      byId('reject').addEventListener('click', () => decide('rejected'));
+    </script>
+  </body>
+</html>
