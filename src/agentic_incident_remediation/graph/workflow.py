@@ -3,9 +3,12 @@
 from collections.abc import Mapping
 from enum import StrEnum
 from typing import Any
+from uuid import UUID, uuid4
 
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
+from langgraph.types import Checkpointer
 
 from agentic_incident_remediation.generator import GeneratorNode
 from agentic_incident_remediation.incidents import normalize_incident
@@ -19,6 +22,7 @@ from agentic_incident_remediation.models import (
     WorkflowStatus,
 )
 from agentic_incident_remediation.models.base import utc_now
+from agentic_incident_remediation.persistence import checkpoint_config
 from agentic_incident_remediation.planner import PlannerNode
 from agentic_incident_remediation.reflector import ReflectorNode
 from agentic_incident_remediation.sandbox import SandboxRunner, ValidatorNode
@@ -239,6 +243,7 @@ def build_reflection_graph(
     generator_model: StructuredModel | None = None,
     *,
     schema_tools: SchemaToolProvider | None = None,
+    checkpointer: Checkpointer = None,
 ) -> CompiledStateGraph[AgentState, Any, AgentState, AgentState]:
     """Compile planning, generation, validation, and bounded self-correction."""
 
@@ -285,7 +290,10 @@ def build_reflection_graph(
             ReflectorRoute.FAILED: END,
         },
     )
-    return builder.compile(name="incident-remediation-reflection")
+    return builder.compile(
+        checkpointer=checkpointer,
+        name="incident-remediation-reflection",
+    )
 
 
 class PlannerWorkflow:
@@ -364,6 +372,7 @@ class SelfCorrectingRemediationWorkflow:
         generator_model: StructuredModel | None = None,
         *,
         schema_tools: SchemaToolProvider | None = None,
+        checkpointer: Checkpointer = None,
         max_retries: int = 3,
     ) -> None:
         self._graph = build_reflection_graph(
@@ -371,14 +380,54 @@ class SelfCorrectingRemediationWorkflow:
             sandbox_runner,
             generator_model,
             schema_tools=schema_tools,
+            checkpointer=checkpointer,
         )
+        self._persistent = checkpointer is not None
         self._max_retries = max_retries
 
-    def invoke(self, alert: Incident | Mapping[str, Any]) -> AgentState:
+    def invoke(
+        self,
+        alert: Incident | Mapping[str, Any],
+        *,
+        execution_id: UUID | None = None,
+    ) -> AgentState:
         incident = normalize_incident(alert)
-        initial_state = AgentState(incident=incident, max_retries=self._max_retries)
+        initial_state = AgentState(
+            execution_id=execution_id or uuid4(),
+            incident=incident,
+            max_retries=self._max_retries,
+        )
         result = self._graph.invoke(
             initial_state,
-            config={"recursion_limit": 10 + self._max_retries * 4},
+            config=self._config(initial_state.execution_id),
         )
         return AgentState.model_validate(result)
+
+    def get_state(self, execution_id: UUID) -> AgentState:
+        """Restore the latest durable state for an execution."""
+
+        self._require_checkpointer()
+        snapshot = self._graph.get_state(self._config(execution_id))
+        if not snapshot.values:
+            raise LookupError(f"execution {execution_id} was not found")
+        return AgentState.model_validate(snapshot.values)
+
+    def get_history(self, execution_id: UUID) -> tuple[AgentState, ...]:
+        """Return newest-first durable snapshots for audit and time-travel inspection."""
+
+        self._require_checkpointer()
+        return tuple(
+            AgentState.model_validate(snapshot.values)
+            for snapshot in self._graph.get_state_history(self._config(execution_id))
+            if snapshot.values
+        )
+
+    def _config(self, execution_id: UUID) -> RunnableConfig:
+        return checkpoint_config(
+            execution_id,
+            recursion_limit=10 + self._max_retries * 4,
+        )
+
+    def _require_checkpointer(self) -> None:
+        if not self._persistent:
+            raise RuntimeError("workflow recovery requires a configured checkpointer")
