@@ -4,7 +4,7 @@ A safety-first multi-agent workflow that turns infrastructure incidents into val
 human-approved remediation pull requests.
 
 The system accepts incident alerts, plans a remediation, generates Kubernetes or Terraform
-artifacts, validate them in isolated containers, correct failures through a bounded reflection
+artifacts, validates them in isolated containers, corrects failures through a bounded reflection
 loop, and pause for human approval before creating a GitHub pull request.
 
 ## Safety boundary
@@ -54,13 +54,44 @@ Automated tests use deterministic model doubles and do not consume hosted-model 
 - A Hugging Face router adapter plus deterministic offline model doubles
 - Environment-based configuration for Redis, Hugging Face inference, and GitHub operations
 - JSON structured logging
+- A FastAPI control plane with execution lookup, approval endpoints, and server-sent state events
+- A responsive review console plus health and Prometheus metrics endpoints
+- A credential-free deterministic demo covering Kubernetes and Terraform scenarios
+- Pull-request CI for linting, formatting, strict typing, tests, and a 90% coverage gate
 - Redis development service
 
 The full graph retries invalid artifacts through a bounded reflection loop and checkpoints every
 node boundary. A valid artifact creates a stable approval request and durably interrupts execution.
 Approval resumes the same execution and can create a pull request; rejection exits without a
 repository write. Exhausted retries, sandbox errors, and repository failures terminate safely. The
-API and demonstration UI will be added incrementally.
+The browser console and API expose this lifecycle without weakening its approval boundary.
+
+## Credential-free demo
+
+Run the complete system locally without Hugging Face, Redis, Docker, GitHub credentials, or any
+billing risk:
+
+```bash
+agentic-remediation-demo
+```
+
+Then open <http://127.0.0.1:8000>. This mode uses deterministic adapters but exercises the real
+FastAPI routes, LangGraph state machine, validation routing, approval interrupt, and pull-request
+capability boundary. The returned pull-request URL is simulated and no network call is made.
+
+See [the demo runbook](docs/demo.md) for an interview walkthrough and
+[the architecture guide](docs/architecture.md) for component and trust boundaries.
+
+## HTTP API
+
+| Method | Route | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/incidents` | Normalize an incident and run until approval or safe failure |
+| `GET` | `/api/executions/{id}` | Restore the latest persisted execution state |
+| `GET` | `/api/executions/{id}/events` | Stream state changes as server-sent events |
+| `POST` | `/api/executions/{id}/approval` | Resume with a correlated approve/reject decision |
+| `GET` | `/health` | Report process liveness without exposing configuration |
+| `GET` | `/metrics` | Export low-cardinality Prometheus counters |
 
 ## Planning workflow
 

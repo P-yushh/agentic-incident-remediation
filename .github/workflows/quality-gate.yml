@@ -1,0 +1,44 @@
+name: quality-gate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install project
+        run: python -m pip install -e '.[dev]'
+
+      - name: Check dependencies
+        run: python -m pip check
+
+      - name: Lint and format
+        run: |
+          python -m ruff check .
+          python -m ruff format --check .
+
+      - name: Type check
+        run: python -m mypy src
+
+      - name: Run test suite with coverage gate
+        run: >-
+          python -m pytest
+          --cov=agentic_incident_remediation
+          --cov-report=term-missing
+          --cov-report=xml
