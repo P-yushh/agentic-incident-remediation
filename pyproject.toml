@@ -26,6 +26,7 @@ dependencies = [
 
 [project.scripts]
 agentic-remediation-api = "agentic_incident_remediation.api.app:main"
+agentic-remediation-demo = "agentic_incident_remediation.demo:main"
 agentic-remediation-schema-mcp = "agentic_incident_remediation.schema_tools.server:main"
 
 [project.optional-dependencies]

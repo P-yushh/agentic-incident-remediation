@@ -1,0 +1,18 @@
+{
+  "id": "b74e09f5-3fca-4f77-8a58-b066f44949a4",
+  "type": "kubernetes_oom_killed",
+  "title": "Payment API pod exceeded its memory limit",
+  "description": "The payment-api container restarted after exceeding its configured memory limit.",
+  "severity": "high",
+  "source": "interview-demo",
+  "labels": {
+    "service": "payment-api",
+    "namespace": "production"
+  },
+  "context": {
+    "k8s_kind": "Deployment",
+    "k8s_api_version": "apps/v1",
+    "current_memory_limit": "512Mi",
+    "observed_peak": "590Mi"
+  }
+}
