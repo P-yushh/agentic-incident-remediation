@@ -13,6 +13,8 @@ authors = [
   { name = "Piyush" },
 ]
 dependencies = [
+  "httpx>=0.28,<1",
+  "langgraph>=1.0,<2",
   "pydantic>=2.10,<3",
   "pydantic-settings>=2.7,<3",
 ]
@@ -58,4 +60,3 @@ strict = true
 packages = ["agentic_incident_remediation"]
 mypy_path = "src"
 plugins = ["pydantic.mypy"]
-
