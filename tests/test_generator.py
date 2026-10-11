@@ -121,6 +121,8 @@ def test_workflow_generates_kubernetes_artifact() -> None:
         "RemediationPlan",
         "ArtifactDraft",
     ]
+    assert "kubernetes-openapi-v1.31-curated" in model.requests[1].user_prompt
+    assert "resources.limits.memory" in model.requests[1].user_prompt
 
 
 def test_workflow_generates_terraform_artifact_with_separate_models() -> None:
@@ -135,6 +137,8 @@ def test_workflow_generates_terraform_artifact_with_separate_models() -> None:
     assert result.artifacts[0].path.endswith(".tf")
     assert generator.requests[0].response_model == "ArtifactDraft"
     assert "Expected kind: terraform_configuration" in generator.requests[0].user_prompt
+    assert "hashicorp/aws" in generator.requests[0].user_prompt
+    assert "source_security_group_id" in generator.requests[0].user_prompt
 
 
 def test_generator_fails_safely_for_wrong_artifact_kind() -> None:
@@ -159,6 +163,21 @@ def test_generator_fails_safely_for_invalid_model_output() -> None:
     assert result.status is WorkflowStatus.FAILED
     assert result.failure_reason is not None
     assert "schema validation" in result.failure_reason
+
+
+def test_generator_fails_closed_when_requested_schema_is_not_approved() -> None:
+    incident = make_incident(IncidentType.KUBERNETES_OOM_KILLED).model_copy(
+        update={"context": {"k8s_kind": "StatefulSet"}}
+    )
+    model = FakeStructuredModel([make_plan_payload(incident)])
+
+    result = RemediationWorkflow(model).invoke(incident)
+
+    assert result.status is WorkflowStatus.FAILED
+    assert result.artifacts == ()
+    assert result.failure_reason is not None
+    assert "unsupported Kubernetes schema" in result.failure_reason
+    assert len(model.requests) == 1
 
 
 def test_generator_creates_linked_revision_with_validation_context() -> None:

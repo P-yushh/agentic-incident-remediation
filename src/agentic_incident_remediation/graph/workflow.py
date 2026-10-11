@@ -19,6 +19,7 @@ from agentic_incident_remediation.models import (
 )
 from agentic_incident_remediation.models.base import utc_now
 from agentic_incident_remediation.planner import PlannerNode
+from agentic_incident_remediation.schema_tools.selection import SchemaToolProvider
 
 
 class PlannerRoute(StrEnum):
@@ -96,13 +97,17 @@ def build_planner_graph(
 def build_generation_graph(
     planner_model: StructuredModel,
     generator_model: StructuredModel | None = None,
+    *,
+    schema_tools: SchemaToolProvider | None = None,
 ) -> CompiledStateGraph[AgentState, Any, AgentState, AgentState]:
     """Compile normalization, planning, and artifact generation workflow stages."""
 
     builder = StateGraph(AgentState)
     builder.add_node("prepare_planning", prepare_planning)
     builder.add_node("planner", PlannerNode(planner_model))
-    builder.add_node("generator", GeneratorNode(generator_model or planner_model))
+    builder.add_node(
+        "generator", GeneratorNode(generator_model or planner_model, schema_tools=schema_tools)
+    )
     builder.add_edge(START, "prepare_planning")
     builder.add_edge("prepare_planning", "planner")
     builder.add_conditional_edges(
@@ -146,9 +151,14 @@ class RemediationWorkflow:
         planner_model: StructuredModel,
         generator_model: StructuredModel | None = None,
         *,
+        schema_tools: SchemaToolProvider | None = None,
         max_retries: int = 3,
     ) -> None:
-        self._graph = build_generation_graph(planner_model, generator_model)
+        self._graph = build_generation_graph(
+            planner_model,
+            generator_model,
+            schema_tools=schema_tools,
+        )
         self._max_retries = max_retries
 
     def invoke(self, alert: Incident | Mapping[str, Any]) -> AgentState:
