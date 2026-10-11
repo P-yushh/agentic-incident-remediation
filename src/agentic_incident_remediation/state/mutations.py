@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping
 
+from agentic_incident_remediation.artifacts import ArtifactRevisionError, latest_artifact
 from agentic_incident_remediation.models import (
     AgentMessage,
     AgentState,
@@ -79,7 +80,18 @@ def add_message(state: AgentState, message: AgentMessage) -> AgentState:
 
 
 def add_artifact(state: AgentState, artifact: GeneratedArtifact) -> AgentState:
-    """Return state with a generated remediation artifact appended."""
+    """Append an artifact only when its revision extends state history."""
+
+    previous = latest_artifact(state.artifacts, artifact.kind)
+    if previous is None:
+        if artifact.revision != 1 or artifact.parent_id is not None:
+            raise ArtifactRevisionError("first artifact must be an unparented revision 1")
+    elif (
+        artifact.revision != previous.revision + 1
+        or artifact.parent_id != previous.id
+        or artifact.path != previous.path
+    ):
+        raise ArtifactRevisionError("artifact does not extend the latest revision")
 
     return state.model_copy(
         update={"artifacts": (*state.artifacts, artifact), "updated_at": utc_now()}

@@ -67,6 +67,7 @@ def test_messages_and_artifacts_are_appended_immutably() -> None:
         kind=ArtifactKind.KUBERNETES_MANIFEST,
         path="remediations/payment-api.yaml",
         content="apiVersion: v1",
+        change_summary="Create the initial remediation proposal.",
     )
 
     with_message = add_message(state, message)

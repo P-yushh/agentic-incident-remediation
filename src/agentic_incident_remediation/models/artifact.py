@@ -2,10 +2,11 @@
 
 from datetime import datetime
 from enum import StrEnum
+from hashlib import sha256
 from pathlib import PurePosixPath
 from uuid import UUID, uuid4
 
-from pydantic import AwareDatetime, Field, field_validator
+from pydantic import AwareDatetime, Field, field_validator, model_validator
 
 from agentic_incident_remediation.models.base import StrictModel, utc_now
 
@@ -17,28 +18,78 @@ class ArtifactKind(StrEnum):
     TERRAFORM_CONFIGURATION = "terraform_configuration"
 
 
-class GeneratedArtifact(StrictModel):
-    """One generated remediation file and its revision metadata."""
+class ArtifactDraft(StrictModel):
+    """Untrusted structured artifact content returned by a model gateway."""
 
-    id: UUID = Field(default_factory=uuid4)
     kind: ArtifactKind
     path: str = Field(min_length=1, max_length=300)
-    content: str = Field(min_length=1)
-    revision: int = Field(default=1, ge=1)
-    created_at: AwareDatetime = Field(default_factory=utc_now)
-    parent_id: UUID | None = None
+    content: str = Field(min_length=1, max_length=200_000)
+    change_summary: str = Field(min_length=1, max_length=500)
 
     @field_validator("path")
     @classmethod
     def path_must_be_safe_and_relative(cls, value: str) -> str:
-        """Reject absolute paths and traversal outside the remediation workspace."""
+        """Restrict generated files to the repository's remediation workspace."""
 
+        if "\\" in value:
+            raise ValueError("artifact path must use POSIX separators")
         normalized = PurePosixPath(value)
         if normalized.is_absolute() or ".." in normalized.parts:
             raise ValueError("artifact path must be relative and cannot contain '..'")
         if str(normalized) in {"", "."}:
             raise ValueError("artifact path must identify a file")
+        if normalized.parts[0] != "remediations":
+            raise ValueError("artifact path must be inside the remediations directory")
+        if any(part.startswith(".") for part in normalized.parts):
+            raise ValueError("artifact path cannot contain hidden path components")
         return str(normalized)
+
+    @field_validator("content")
+    @classmethod
+    def content_must_not_execute_changes(cls, value: str) -> str:
+        """Reject command snippets that would apply or destroy infrastructure."""
+
+        lowered = value.lower()
+        forbidden = ("kubectl apply", "terraform apply", "terraform destroy", "rm -rf")
+        if any(command in lowered for command in forbidden):
+            raise ValueError("artifact content cannot contain infrastructure execution commands")
+        return value
+
+    @model_validator(mode="after")
+    def extension_must_match_kind(self) -> "ArtifactDraft":
+        """Require a file extension understood by the downstream validator."""
+
+        suffix = PurePosixPath(self.path).suffix.lower()
+        if self.kind is ArtifactKind.KUBERNETES_MANIFEST and suffix not in {".yaml", ".yml"}:
+            raise ValueError("Kubernetes artifacts must use a .yaml or .yml extension")
+        if self.kind is ArtifactKind.TERRAFORM_CONFIGURATION and suffix != ".tf":
+            raise ValueError("Terraform artifacts must use a .tf extension")
+        return self
+
+
+class GeneratedArtifact(ArtifactDraft):
+    """Trusted remediation file with workflow-assigned revision metadata."""
+
+    id: UUID = Field(default_factory=uuid4)
+    revision: int = Field(default=1, ge=1)
+    created_at: AwareDatetime = Field(default_factory=utc_now)
+    parent_id: UUID | None = None
+
+    @model_validator(mode="after")
+    def revision_must_have_consistent_parent(self) -> "GeneratedArtifact":
+        """Require a parent only for revisions after the initial artifact."""
+
+        if self.revision == 1 and self.parent_id is not None:
+            raise ValueError("initial artifact revision cannot have a parent")
+        if self.revision > 1 and self.parent_id is None:
+            raise ValueError("artifact revisions after 1 require a parent")
+        return self
+
+    @property
+    def checksum(self) -> str:
+        """Return a stable SHA-256 digest for audit and validation records."""
+
+        return sha256(self.content.encode("utf-8")).hexdigest()
 
     @property
     def timestamp(self) -> datetime:
