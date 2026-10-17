@@ -76,7 +76,7 @@ jobs:
       - name: Verify real containers and cross-process Redis recovery
         id: integration
         run: >-
-          python -m pytest tests/integration -m integration -vv --maxfail=2
+          python -m pytest tests/integration -m integration -vv
           --junitxml="${RUNNER_TEMP}/container-integration.xml"
 
       - name: Report synthetic integration failures

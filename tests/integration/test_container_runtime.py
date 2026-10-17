@@ -83,7 +83,7 @@ def worker(mode: str, *arguments: str) -> dict[str, Any]:
 def test_api_approval_checkpoint_survives_a_fresh_process(kind: str) -> None:
     pending = worker("start", "--kind", kind)
     assert pending["status"] == "awaiting_approval", pending
-    assert pending["review_ready"] is True
+    assert pending["review_ready"] is True, pending.get("checkpoint_diagnostics")
     assert pending["validation_results"][-1]["status"] == "passed"
     assert pending["pull_request"] is None
 

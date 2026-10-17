@@ -25,13 +25,14 @@ def main() -> None:
     args = parser.parse_args()
     publisher = FakePullRequestPublisher()
     model = FakeStructuredModel([]) if args.mode == "recover" else FixtureStructuredModel()
+    checkpointer = create_redis_checkpointer(os.environ["AIR_INTEGRATION_REDIS_URL"])
     workflow = DurableApprovalWorkflow(
         model,
         DockerSandboxRunner(),
         publisher,
         repository="example/synthetic-integration",
         schema_tools=LocalSchemaToolProvider(),
-        checkpointer=create_redis_checkpointer(os.environ["AIR_INTEGRATION_REDIS_URL"]),
+        checkpointer=checkpointer,
         max_retries=1,
     )
     service = RemediationService(workflow)
@@ -48,6 +49,23 @@ def main() -> None:
             )
             assert response.status_code == 202, response.text
             result = response.json()
+            if not result["review_ready"]:
+                config = workflow._config(UUID(result["execution_id"]))
+                snapshot = workflow._graph.get_state(config)
+                checkpoint = checkpointer.get_tuple(config)
+                result["checkpoint_diagnostics"] = {
+                    "next": snapshot.next,
+                    "tasks": [
+                        {"id": task.id, "name": task.name, "interrupts": len(task.interrupts)}
+                        for task in snapshot.tasks
+                    ],
+                    "pending_writes": [
+                        {"task": task, "channel": channel, "value_type": type(value).__name__}
+                        for task, channel, value in (checkpoint.pending_writes or [])
+                    ]
+                    if checkpoint is not None
+                    else [],
+                }
         elif args.mode == "pause":
             state = workflow.prepare(
                 {
