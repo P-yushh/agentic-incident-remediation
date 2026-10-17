@@ -1,6 +1,7 @@
 """HTTP boundary, event stream, and observability tests."""
 
 import json
+import re
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -133,6 +134,45 @@ def test_api_exposes_dashboard_health_and_openapi() -> None:
     assert health.json() == {"status": "ok", "service": "agentic-incident-remediation"}
     assert health.headers["x-request-id"] == "request-123"
     assert "/api/incidents" in schema["paths"]
+
+
+def test_dashboard_uses_sand_teal_palette_with_readable_text() -> None:
+    client, _ = make_client()
+    dashboard = client.get("/").text
+    colors = dict(re.findall(r"--([a-z-]+): (#[0-9a-f]{6});", dashboard))
+
+    assert 'data-theme="sand-teal"' in dashboard
+    assert "color-scheme: light;" in dashboard
+    assert colors["bg"] == "#f7f4ee"
+    assert colors["panel"] == "#fffdf8"
+    assert colors["accent"] == "#096b66"
+
+    def luminance(color: str) -> float:
+        channels = [int(color[index : index + 2], 16) / 255 for index in (1, 3, 5)]
+        linear = [
+            value / 12.92 if value <= 0.04045 else ((value + 0.055) / 1.055) ** 2.4
+            for value in channels
+        ]
+        return sum(
+            value * weight for value, weight in zip(linear, (0.2126, 0.7152, 0.0722), strict=True)
+        )
+
+    for foreground, background in (
+        ("ink", "panel"),
+        ("ink", "soft"),
+        ("ink", "side"),
+        ("muted", "bg"),
+        ("muted", "panel"),
+        ("muted", "accent-bg"),
+        ("accent", "accent-bg"),
+        ("on-accent", "accent"),
+        ("danger", "panel"),
+        ("on-danger", "danger"),
+    ):
+        lighter, darker = sorted(
+            (luminance(colors[foreground]), luminance(colors[background])), reverse=True
+        )
+        assert (lighter + 0.05) / (darker + 0.05) >= 4.5, (foreground, background)
 
 
 def test_approved_api_flow_streams_state_and_records_metrics() -> None:

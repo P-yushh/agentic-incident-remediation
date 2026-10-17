@@ -1,105 +1,283 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="sand-teal">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Incident Remediation Console</title>
     <style>
-      :root { color-scheme: dark; font-family: Inter, system-ui, sans-serif; background: #08111f; color: #e7eef9; }
+      :root {
+        color-scheme: light;
+        --bg: #f7f4ee; --panel: #fffdf8; --side: #eee9df;
+        --ink: #2b3734; --muted: #5f6b63; --line: #dad8cc; --soft: #efeee5;
+        --accent: #096b66; --accent-bg: #e0f1eb; --on-accent: #ffffff;
+        --danger: #a12d3c; --on-danger: #ffffff;
+        font-family: Inter, system-ui, sans-serif; background: var(--bg); color: var(--ink);
+      }
       * { box-sizing: border-box; }
-      body { margin: 0; min-height: 100vh; background: radial-gradient(circle at 15% 0%, #17335a 0, #08111f 38%); }
-      main { width: min(1120px, 92vw); margin: 0 auto; padding: 54px 0 80px; }
-      .eyebrow { color: #61dafb; letter-spacing: .14em; text-transform: uppercase; font-size: .75rem; font-weight: 700; }
-      h1 { font-size: clamp(2rem, 5vw, 4.5rem); max-width: 800px; margin: 12px 0; line-height: 1; }
-      .lede { color: #aabbd1; max-width: 720px; font-size: 1.05rem; }
-      .grid { display: grid; grid-template-columns: minmax(300px, .8fr) minmax(360px, 1.2fr); gap: 22px; margin-top: 36px; }
-      .card { background: rgba(10, 25, 44, .9); border: 1px solid #25415f; border-radius: 18px; padding: 24px; box-shadow: 0 20px 60px #02070d66; }
-      label { display: block; margin: 14px 0 6px; color: #b9c7d8; font-size: .86rem; }
-      input, textarea, select, button { width: 100%; border-radius: 9px; border: 1px solid #36516f; padding: 11px 12px; font: inherit; }
-      input, textarea, select { color: #edf5ff; background: #091523; }
-      textarea { min-height: 90px; resize: vertical; }
-      button { margin-top: 16px; color: #06121f; background: #61dafb; border: 0; font-weight: 750; cursor: pointer; }
-      button.secondary { color: #e8eff9; background: #24364b; }
-      button.danger { color: white; background: #a93d52; }
+      body { margin: 0; min-height: 100vh; background: var(--bg); }
+      main { width: min(1200px, 92vw); margin: 0 auto; padding: 40px 0 64px; }
+      .eyebrow { color: var(--accent); letter-spacing: .14em; text-transform: uppercase; font-size: .75rem; font-weight: 700; }
+      .page-header { display: flex; justify-content: space-between; align-items: center; gap: 24px; }
+      h1 { font-size: clamp(1.8rem, 4vw, 2.6rem); margin: 10px 0; line-height: 1.15; }
+      h2 { font-size: 1.1rem; margin: 0 0 16px; }
+      .lede { color: var(--muted); max-width: 760px; }
+      .grid { display: grid; grid-template-columns: minmax(220px, .38fr) minmax(0, 1fr); gap: 22px; margin-top: 28px; }
+      .card { min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 24px; }
+      label { display: block; margin: 16px 0 6px; color: var(--muted); font-size: .86rem; }
+      input, textarea, select, button { max-width: 100%; border-radius: 8px; padding: 11px 12px; font: inherit; }
+      input, textarea, select { width: 100%; border: 1px solid var(--muted); color: var(--ink); background: var(--panel); }
+      textarea { min-height: 120px; resize: vertical; }
+      button { color: var(--on-accent); background: var(--accent); border: 1px solid transparent; font-weight: 600; cursor: pointer; }
+      button.secondary { color: var(--ink); background: var(--side); border-color: var(--line); }
+      button.danger { color: var(--on-danger); background: var(--danger); }
+      button:not(:disabled):hover { filter: brightness(.95); }
       button:disabled { opacity: .45; cursor: not-allowed; }
-      .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-      .status { display: inline-flex; padding: 7px 11px; border-radius: 999px; background: #162a40; color: #8ee6a8; font-family: ui-monospace, monospace; }
-      pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #06101c; border-radius: 10px; padding: 16px; min-height: 260px; color: #cbd8e8; }
-      .muted { color: #8497ad; }
-      a { color: #61dafb; }
-      @media (max-width: 780px) { .grid { grid-template-columns: 1fr; } }
+      :focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+      .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+      .status { display: inline-flex; padding: 6px 10px; border-radius: 99px; background: var(--accent-bg); color: var(--accent); font: .8rem ui-monospace, monospace; margin-bottom: 16px; }
+      pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--soft); border-radius: 8px; padding: 16px; min-height: 240px; color: var(--ink); font-size: .8rem; }
+      .muted { color: var(--muted); font-size: .86rem; line-height: 1.6; }
+      .error { color: var(--danger); font-size: .86rem; }
+      #queue { list-style: none; padding: 0; margin: 0; }
+      #queue li + li { margin-top: 10px; }
+      .incident { width: 100%; text-align: left; color: var(--ink); background: var(--panel); padding: 13px; border: 1px solid var(--line); }
+      .incident[aria-pressed="true"] { background: var(--accent-bg); border-color: var(--accent); }
+      .incident span { display: block; overflow-wrap: anywhere; }
+      .incident .muted { font-weight: 400; margin-top: 5px; }
+      .incident-timer { display: block; margin-top: 7px; color: var(--accent); font: .85rem ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+      .queue-controls { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 7px; }
+      .queue-controls button { font-size: .75rem; padding: 6px 9px; }
+      .elapsed-summary { margin: 0 0 12px; color: var(--muted); font-size: .85rem; }
+      #execution { overflow-wrap: anywhere; }
+      #execution-description, #result { overflow-wrap: anywhere; }
+      .simulator-panel { position: fixed; inset: 0 0 0 auto; margin: 0; width: min(460px, 100%); height: 100dvh; max-height: 100dvh; max-width: 100%; padding: 0; border: 0; border-left: 1px solid var(--line); color: var(--ink); background: var(--panel); }
+      .simulator-panel::backdrop { background: #2b373480; }
+      .panel-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 24px; border-bottom: 1px solid var(--line); }
+      .panel-header h2 { margin: 0; }
+      .panel-header button { min-width: 40px; padding: 6px; font-size: 1.3rem; }
+      .panel-content { padding: 0 24px 24px; }
+      .panel-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 24px; }
+      #submit-incident { flex: 1; }
+      a { color: var(--accent); }
+      [hidden] { display: none !important; }
+      @media (max-width: 780px) { .grid { grid-template-columns: minmax(0, 1fr); } .page-header { align-items: flex-start; flex-direction: column; gap: 8px; } .card { padding: 18px; } }
+      @media (pointer: coarse) { button { min-height: 44px; } input, textarea, select { font-size: 16px; } }
     </style>
   </head>
   <body>
     <main>
-      <div class="eyebrow">Safety-first infrastructure automation</div>
-      <h1>Incident Remediation Console</h1>
-      <p class="lede">Simulate an incident, inspect the validated proposal, and make the human decision that gates pull-request creation. Nothing is applied to infrastructure.</p>
-      <section class="grid">
-        <form id="incident-form" class="card">
-          <h2>Simulate incident</h2>
-          <label for="type">Incident type</label>
-          <select id="type"><option value="kubernetes_oom_killed">Kubernetes OOMKilled</option><option value="kubernetes_crash_loop">Kubernetes CrashLoop</option><option value="terraform_drift">Terraform drift</option></select>
-          <label for="title">Title</label>
-          <input id="title" value="Payment API pod exceeded its memory limit" required>
-          <label for="description">Description</label>
-          <textarea id="description" required>The payment-api container restarted after exceeding its configured memory limit.</textarea>
-          <button type="submit">Generate remediation proposal</button>
-          <p class="muted" id="message">Ready for a deterministic or live demonstration.</p>
-        </form>
-        <section class="card" aria-live="polite">
+      <header class="page-header">
+        <div><div class="eyebrow">Safety-first infrastructure automation</div><h1>Incident Remediation Console</h1></div>
+        <button id="open-simulator" type="button" aria-haspopup="dialog" aria-controls="simulator">Simulate incident</button>
+      </header>
+      <p class="lede">Inspect remediation proposals, review validation results, and approve or reject pull-request creation. Nothing is applied to infrastructure.</p>
+      <p class="muted" id="workspace-message" role="status"></p>
+      <section class="grid" aria-label="Incident workspace">
+        <aside class="card" aria-labelledby="queue-heading">
+          <h2 id="queue-heading">Incident queue</h2>
+          <p class="muted" id="queue-empty">No incidents yet. Use “Simulate incident” to create a sample alert.</p>
+          <ul id="queue" aria-label="Incidents created in this session"></ul>
+          <p id="queue-error" class="error" role="alert"></p>
+          <p class="muted">This queue shows incidents created in this browser session.</p>
+        </aside>
+        <section class="card" aria-label="Selected execution">
           <span class="status" id="status">not started</span>
-          <h2 id="execution">Execution details</h2>
+          <p class="elapsed-summary">Alert age: <time id="elapsed">00:00</time><span id="elapsed-note"></span></p>
+          <h2 id="execution" tabindex="-1">Execution details</h2>
+          <p class="muted" id="execution-description">Select an incident to review its generated proposal.</p>
           <pre id="artifact">The generated artifact and validation result will appear here.</pre>
-          <div class="actions">
-            <button id="approve" disabled>Approve pull request</button>
-            <button id="reject" class="danger" disabled>Reject proposal</button>
-          </div>
-          <p id="result"></p>
+          <div class="actions"><button id="approve" disabled>Approve pull request</button><button id="reject" class="danger" disabled>Reject proposal</button></div>
+          <p id="result" role="status"></p>
+          <p id="execution-error" class="error" role="alert"></p>
         </section>
       </section>
     </main>
+    <dialog id="simulator" class="simulator-panel" aria-labelledby="simulator-heading" aria-describedby="simulator-note">
+      <div class="panel-header"><h2 id="simulator-heading">Simulate incident</h2><button id="close-simulator" class="secondary" type="button" aria-label="Close simulator">×</button></div>
+      <form id="incident-form" class="panel-content">
+        <p class="muted" id="simulator-note">Create a sample alert using this server’s configured workflow. In live mode, approving a proposal can create a real GitHub pull request.</p>
+        <label for="type">Incident type</label>
+        <select id="type"><option value="kubernetes_oom_killed">Kubernetes OOMKilled</option><option value="kubernetes_crash_loop">Kubernetes CrashLoop</option><option value="terraform_drift">Terraform drift</option></select>
+        <label for="service">Service</label><input id="service" value="payment-api" maxlength="100" required>
+        <label for="title">Title</label><input id="title" value="Payment API pod exceeded its memory limit" maxlength="160" required>
+        <label for="description">Description</label><textarea id="description" maxlength="4000" required>The payment-api container restarted after exceeding its configured memory limit.</textarea>
+        <div class="panel-actions"><button id="cancel-simulator" class="secondary" type="button">Cancel</button><button id="submit-incident" type="submit">Create incident</button></div>
+        <p class="muted" id="message" role="status">The incident will appear in your queue after submission.</p>
+        <p class="error" id="simulator-error" role="alert"></p>
+      </form>
+    </dialog>
     <script>
-      const view = { executionId: null, approvalId: null, stream: null };
       const byId = (id) => document.getElementById(id);
+      const view = { executionId: null, stream: null, executions: new Map(), submitting: false, deciding: new Set(), controlling: new Set(), refreshing: new Set() };
+      const terminal = new Set(['completed', 'rejected', 'failed', 'terminated']);
+      const simulator = byId('simulator');
+      function elapsedInfo(state) {
+        const start = Date.parse(state.incident.occurred_at || state.created_at);
+        const stop = state.approval?.requested_at || (terminal.has(state.status) ? state.updated_at : null);
+        const seconds = Math.max(0, Math.floor(((stop ? Date.parse(stop) : Date.now()) - start) / 1000));
+        const parts = [Math.floor(seconds / 3600), Math.floor(seconds / 60) % 60, seconds % 60];
+        const text = (parts[0] ? parts : parts.slice(1)).map((part) => String(part).padStart(2, '0')).join(':');
+        return { text, note: state.approval?.requested_at ? ' · stopped at review' : stop ? ' · stopped' : ' · elapsed' };
+      }
+      function tickTimers() {
+        document.querySelectorAll('[data-incident-timer]').forEach((timer) => {
+          const state = view.executions.get(timer.dataset.incidentTimer);
+          if (state) { const age = elapsedInfo(state); timer.textContent = age.text + age.note; }
+        });
+        const selected = view.executions.get(view.executionId);
+        if (selected) {
+          const age = elapsedInfo(selected); byId('elapsed').textContent = age.text; byId('elapsed-note').textContent = age.note;
+        }
+      }
+      function displayStatus(state) {
+        return state.control_status && state.control_status !== 'running' ? state.control_status : state.status;
+      }
+      function renderQueue() {
+        const focused = document.activeElement;
+        const focusId = focused?.dataset?.execution;
+        const focusAction = focused?.dataset?.control;
+        byId('queue-empty').hidden = view.executions.size > 0;
+        const items = [...view.executions.values()].reverse().map((state) => {
+          const item = document.createElement('li');
+          const button = document.createElement('button');
+          button.type = 'button'; button.className = 'incident';
+          button.setAttribute('aria-pressed', String(state.execution_id === view.executionId));
+          const title = document.createElement('span'); title.textContent = state.incident.title;
+          const detail = document.createElement('span'); detail.className = 'muted';
+          detail.textContent = `${state.incident.labels?.service || state.incident.type} · ${displayStatus(state)}`;
+          const timer = document.createElement('time'); timer.className = 'incident-timer'; timer.dataset.incidentTimer = state.execution_id;
+          button.dataset.execution = state.execution_id;
+          button.append(title, detail, timer);
+          button.addEventListener('click', () => selectExecution(state.execution_id));
+          const controls = document.createElement('div'); controls.className = 'queue-controls';
+          const paused = ['paused', 'pause_requested'].includes(state.control_status);
+          for (const action of [paused ? 'resume' : 'pause', 'terminate']) {
+            const control = document.createElement('button'); control.type = 'button';
+            control.className = action === 'terminate' ? 'danger' : 'secondary';
+            control.textContent = action[0].toUpperCase() + action.slice(1);
+            control.setAttribute('aria-label', `${control.textContent} ${state.incident.title}`);
+            control.dataset.execution = state.execution_id; control.dataset.control = action;
+            control.disabled = terminal.has(state.status) || state.control_status === 'termination_requested' || view.controlling.has(state.execution_id) || view.deciding.has(state.execution_id) || ['approved', 'executing'].includes(state.status) || (action === 'pause' && state.review_ready);
+            control.addEventListener('click', () => controlIncident(state.execution_id, action));
+            controls.append(control);
+          }
+          item.append(button, controls); return item;
+        });
+        byId('queue').replaceChildren(...items);
+        tickTimers();
+        if (focusId) {
+          const candidates = [...byId('queue').querySelectorAll('button')].filter((button) => button.dataset.execution === focusId);
+          const target = candidates.find((button) => button.dataset.control === focusAction && !button.disabled) || candidates[0];
+          target?.focus({ preventScroll: true });
+        }
+      }
       function render(state) {
-        view.executionId = state.execution_id;
-        view.approvalId = state.approval?.id || null;
-        byId('status').textContent = state.status;
-        byId('execution').textContent = `Execution ${state.execution_id.slice(0, 8)}`;
-        const latest = state.artifacts.at(-1);
-        const validation = state.validation_results.at(-1);
+        const previous = view.executions.get(state.execution_id);
+        if (previous && Date.parse(previous.updated_at) > Date.parse(state.updated_at)) return;
+        if (previous && previous.updated_at === state.updated_at && previous.review_ready && !state.review_ready) return;
+        view.executions.set(state.execution_id, state); renderQueue();
+        if (state.execution_id !== view.executionId) return;
+        byId('status').textContent = displayStatus(state);
+        byId('workspace-message').textContent = state.review_ready && state.control_status === 'running' ? 'The proposal is ready for human review.' : `Workflow status: ${displayStatus(state)}.`;
+        byId('execution').textContent = state.incident.title;
+        byId('execution-description').textContent = `Execution ${state.execution_id.slice(0, 8)} · ${state.incident.description}`;
+        const latest = state.artifacts.at(-1); const validation = state.validation_results.at(-1);
         byId('artifact').textContent = latest ? `${latest.path}\n\n${latest.content}\n\nValidation: ${validation?.status || 'pending'}` : 'No artifact generated.';
-        const pending = state.status === 'awaiting_approval';
-        byId('approve').disabled = !pending;
-        byId('reject').disabled = !pending;
+        const pending = state.review_ready && state.status === 'awaiting_approval' && state.control_status === 'running' && !view.deciding.has(state.execution_id) && !view.controlling.has(state.execution_id);
+        byId('approve').disabled = !pending; byId('reject').disabled = !pending;
         byId('result').textContent = state.pull_request ? `Pull request: ${state.pull_request.url}` : (state.failure_reason || '');
+      }
+      function selectExecution(executionId) {
+        view.stream?.close(); view.stream = null; view.executionId = executionId;
+        byId('execution-error').textContent = '';
+        const state = view.executions.get(executionId); render(state);
+        if (terminal.has(state.status)) return;
+        const stream = new EventSource(`/api/executions/${executionId}/events`); view.stream = stream;
+        stream.addEventListener('state', (message) => {
+          if (view.executionId !== executionId || view.stream !== stream) return;
+          const next = JSON.parse(message.data); render(next);
+          if (terminal.has(next.status) || next.review_ready) stream.close();
+        });
+        stream.onerror = () => {
+          if (view.stream === stream && view.executionId === executionId) {
+            byId('execution-error').textContent = 'Live updates were interrupted. Select this incident again to reconnect.';
+            stream.close();
+          }
+        };
       }
       async function jsonRequest(url, options = {}) {
         const response = await fetch(url, { headers: { 'content-type': 'application/json' }, ...options });
         const payload = await response.json();
-        if (!response.ok) throw new Error(payload.detail || 'Request failed');
+        if (!response.ok) {
+          const detail = Array.isArray(payload.detail) ? payload.detail.map((item) => item.msg).join('; ') : payload.detail;
+          throw new Error(detail || 'Request failed');
+        }
         return payload;
       }
-      byId('incident-form').addEventListener('submit', async (event) => {
-        event.preventDefault();
-        byId('message').textContent = 'Planning and validating proposal…';
+      async function controlIncident(executionId, action) {
+        if (view.controlling.has(executionId)) return;
+        byId('queue-error').textContent = '';
+        view.controlling.add(executionId); render(view.executions.get(executionId));
         try {
-          const state = await jsonRequest('/api/incidents', { method: 'POST', body: JSON.stringify({ type: byId('type').value, title: byId('title').value, description: byId('description').value, severity: 'high', source: 'demo-console' }) });
+          const state = await jsonRequest(`/api/executions/${executionId}/control`, { method: 'POST', body: JSON.stringify({ action }) });
           render(state);
-          byId('message').textContent = 'Proposal is ready for human review.';
-          view.stream?.close();
-          view.stream = new EventSource(`/api/executions/${state.execution_id}/events`);
-          view.stream.addEventListener('state', (message) => render(JSON.parse(message.data)));
-        } catch (error) { byId('message').textContent = error.message; }
+          byId('workspace-message').textContent = `${state.incident.title}: ${displayStatus(state)}.`;
+        } catch (error) { byId('queue-error').textContent = error.message; }
+        finally { view.controlling.delete(executionId); render(view.executions.get(executionId)); }
+      }
+      async function refreshQueue() {
+        tickTimers();
+        for (const [id, state] of view.executions) {
+          if (terminal.has(state.status) || state.review_ready || view.refreshing.has(id)) continue;
+          view.refreshing.add(id);
+          jsonRequest(`/api/executions/${id}`).then(render).catch(() => {}).finally(() => view.refreshing.delete(id));
+        }
+      }
+      setInterval(refreshQueue, 1000);
+      byId('open-simulator').addEventListener('click', () => {
+        byId('simulator-error').textContent = ''; simulator.showModal(); byId('type').focus();
+      });
+      for (const id of ['close-simulator', 'cancel-simulator']) byId(id).addEventListener('click', () => simulator.close());
+      simulator.addEventListener('click', (event) => {
+        const rect = simulator.getBoundingClientRect();
+        if (event.target === simulator && (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom)) simulator.close();
+      });
+      for (const id of ['service', 'title', 'description']) byId(id).addEventListener('input', () => byId(id).setCustomValidity(''));
+      byId('incident-form').addEventListener('submit', async (event) => {
+        event.preventDefault(); if (view.submitting) return;
+        for (const id of ['service', 'title', 'description']) {
+          if (!byId(id).value.trim()) {
+            byId(id).setCustomValidity('Enter a value containing more than whitespace.'); byId(id).reportValidity(); return;
+          }
+        }
+        view.submitting = true; byId('submit-incident').disabled = true;
+        byId('incident-form').setAttribute('aria-busy', 'true');
+        byId('message').textContent = 'Creating incident and generating a proposal…'; byId('simulator-error').textContent = '';
+        try {
+          const state = await jsonRequest('/api/incidents?background=true', { method: 'POST', body: JSON.stringify({ type: byId('type').value, title: byId('title').value.trim(), description: byId('description').value.trim(), severity: 'high', source: 'demo-console', occurred_at: new Date().toISOString(), labels: { service: byId('service').value.trim() } }) });
+          view.executions.set(state.execution_id, state); selectExecution(state.execution_id); simulator.close(); byId('execution').focus();
+          byId('workspace-message').textContent = state.review_ready && state.control_status === 'running' ? 'Incident created. The proposal is ready for human review.' : `Incident created. Workflow status: ${displayStatus(state)}.`;
+          byId('message').textContent = 'The incident will appear in your queue after submission.';
+        } catch (error) {
+          if (!simulator.open) simulator.showModal();
+          byId('simulator-error').textContent = error.message;
+          byId('message').textContent = 'The incident could not be created. Check the error and try again.';
+        } finally {
+          view.submitting = false; byId('submit-incident').disabled = false; byId('incident-form').setAttribute('aria-busy', 'false');
+        }
       });
       async function decide(decision) {
-        if (!view.executionId || !view.approvalId) return;
+        const executionId = view.executionId; const current = view.executions.get(executionId);
+        if (!current?.approval?.id || current.status !== 'awaiting_approval' || view.deciding.has(executionId)) return;
+        view.deciding.add(executionId); byId('execution-error').textContent = ''; render(current);
         try {
-          const state = await jsonRequest(`/api/executions/${view.executionId}/approval`, { method: 'POST', body: JSON.stringify({ approval_id: view.approvalId, decision, decided_by: 'interview-demo-reviewer', comment: `${decision} from demonstration console` }) });
-          render(state);
-          view.stream?.close();
-        } catch (error) { byId('result').textContent = error.message; }
+          const state = await jsonRequest(`/api/executions/${executionId}/approval`, { method: 'POST', body: JSON.stringify({ approval_id: current.approval.id, decision, decided_by: 'interview-demo-reviewer', comment: `${decision} from demonstration console` }) });
+          render(state); if (view.executionId === executionId) view.stream?.close();
+        } catch (error) {
+          if (view.executionId === executionId) byId('execution-error').textContent = error.message;
+        } finally {
+          view.deciding.delete(executionId); render(view.executions.get(executionId));
+        }
       }
       byId('approve').addEventListener('click', () => decide('approved'));
       byId('reject').addEventListener('click', () => decide('rejected'));
