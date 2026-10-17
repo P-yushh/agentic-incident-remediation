@@ -72,7 +72,7 @@ def test_completed_approval_accepts_auditor_metadata() -> None:
         artifact_ids=(uuid4(),),
         decision=ApprovalDecision.APPROVED,
         decided_at=datetime.now(tz=UTC),
-        decided_by="interviewer@example.com",
+        decided_by="reviewer@example.com",
     )
 
     assert record.decision is ApprovalDecision.APPROVED

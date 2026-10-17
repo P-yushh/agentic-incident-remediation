@@ -5,11 +5,11 @@ human-approved remediation pull requests.
 
 The system accepts incident alerts, plans a remediation, generates Kubernetes or Terraform
 artifacts, validates them in isolated containers, corrects failures through a bounded reflection
-loop, and pause for human approval before creating a GitHub pull request.
+loop, and pauses for human approval before creating a GitHub pull request.
 
 ## Safety boundary
 
-The portfolio implementation creates proposed changes and pull requests. It does not apply
+The implementation creates proposed changes and pull requests. It does not apply
 changes to a real Kubernetes cluster or cloud account automatically.
 
 ## Development prerequisites
@@ -63,7 +63,7 @@ Automated tests use deterministic model doubles and do not consume hosted-model 
 The full graph retries invalid artifacts through a bounded reflection loop and checkpoints every
 node boundary. A valid artifact creates a stable approval request and durably interrupts execution.
 Approval resumes the same execution and can create a pull request; rejection exits without a
-repository write. Exhausted retries, sandbox errors, and repository failures terminate safely. The
+repository write. Exhausted retries, sandbox errors, and repository failures terminate safely.
 The browser console and API expose this lifecycle without weakening its approval boundary.
 
 ## Credential-free demo
@@ -79,16 +79,55 @@ Then open <http://127.0.0.1:8000>. This mode uses deterministic adapters but exe
 FastAPI routes, LangGraph state machine, validation routing, approval interrupt, and pull-request
 capability boundary. The returned pull-request URL is simulated and no network call is made.
 
-See [the demo runbook](docs/demo.md) for an interview walkthrough and
-[the architecture guide](docs/architecture.md) for component and trust boundaries.
+See [the architecture guide](docs/architecture.md) for component and trust boundaries.
+
+### Dashboard and execution controls
+
+The dashboard uses a light Sand & Teal palette. **Simulate incident** opens a side panel for
+creating synthetic alerts. Submitted incidents appear in a browser-session queue with their
+generated proposal, validation status, and human approval controls. Refreshing the page clears
+this local queue; persisted executions remain accessible by ID when using Redis.
+
+Each incident displays elapsed wall-clock time since its alert timestamp, including paused time.
+The timer freezes at the approval request, or at failure or termination before review.
+
+- **Pause** stops scheduling new workflow nodes after the current node finishes.
+- **Resume** continues the same checkpointed execution without bypassing human review.
+- **Terminate** stops further workflow work and prevents subsequent approval or PR publication.
+  It does not undo an already published pull request.
+
+In-flight external calls must finish before a requested pause or termination takes effect.
+Pause is disabled at human review, and finished executions or repository publication already
+in progress cannot be controlled. Background processing uses four workers in one API process;
+pending controls are process-local until the current node finishes and checkpoints them.
+
+The dashboard submits incidents with `POST /api/incidents?background=true`. Omitting the query
+parameter retains synchronous processing. The deterministic runtime adds a short delay between
+background steps so state changes and controls are visible; live processing adds no such delay.
+
+### Live integrations
+
+Live mode uses Hugging Face inference, Redis checkpoints, Docker validators, and the GitHub API.
+Build the validator images described below, configure `HF_TOKEN` and `GITHUB_TOKEN` in a local
+environment, and run:
+
+```bash
+docker compose up -d redis
+agentic-remediation-api
+```
+
+Use a disposable repository and a tightly scoped token for integration testing. Human approval
+may create a real branch and pull request, but it cannot merge or apply the generated changes.
 
 ## HTTP API
 
 | Method | Route | Purpose |
 | --- | --- | --- |
 | `POST` | `/api/incidents` | Normalize an incident and run until approval or safe failure |
+| `POST` | `/api/incidents?background=true` | Start background processing and return the persisted incident |
 | `GET` | `/api/executions/{id}` | Restore the latest persisted execution state |
 | `GET` | `/api/executions/{id}/events` | Stream state changes as server-sent events |
+| `POST` | `/api/executions/{id}/control` | Request `pause`, `resume`, or `terminate` using the `action` field |
 | `POST` | `/api/executions/{id}/approval` | Resume with a correlated approve/reject decision |
 | `GET` | `/health` | Report process liveness without exposing configuration |
 | `GET` | `/metrics` | Export low-cardinality Prometheus counters |

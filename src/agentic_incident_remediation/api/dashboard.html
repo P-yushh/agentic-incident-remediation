@@ -271,7 +271,7 @@
         if (!current?.approval?.id || current.status !== 'awaiting_approval' || view.deciding.has(executionId)) return;
         view.deciding.add(executionId); byId('execution-error').textContent = ''; render(current);
         try {
-          const state = await jsonRequest(`/api/executions/${executionId}/approval`, { method: 'POST', body: JSON.stringify({ approval_id: current.approval.id, decision, decided_by: 'interview-demo-reviewer', comment: `${decision} from demonstration console` }) });
+          const state = await jsonRequest(`/api/executions/${executionId}/approval`, { method: 'POST', body: JSON.stringify({ approval_id: current.approval.id, decision, decided_by: 'console-reviewer', comment: `${decision} from demonstration console` }) });
           render(state); if (view.executionId === executionId) view.stream?.close();
         } catch (error) {
           if (view.executionId === executionId) byId('execution-error').textContent = error.message;
