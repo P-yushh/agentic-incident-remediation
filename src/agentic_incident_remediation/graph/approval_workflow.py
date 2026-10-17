@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from langchain_core.runnables import RunnableConfig
@@ -26,12 +26,15 @@ from agentic_incident_remediation.graph.workflow import (
 from agentic_incident_remediation.incidents import normalize_incident
 from agentic_incident_remediation.llm import StructuredModel
 from agentic_incident_remediation.models import (
+    AgentMessage,
     AgentState,
     ApprovalDecision,
     ApprovalResponse,
     Incident,
+    MessageRole,
     WorkflowStatus,
 )
+from agentic_incident_remediation.models.base import utc_now
 from agentic_incident_remediation.operations import PullRequestExecutorNode, PullRequestPublisher
 from agentic_incident_remediation.persistence import checkpoint_config
 from agentic_incident_remediation.planner import PlannerNode
@@ -204,6 +207,8 @@ class DurableApprovalWorkflow:
 
         decision = ApprovalResponse.model_validate(response)
         current = self.get_state(execution_id)
+        if current.control_status != "running":
+            raise ValueError("execution is paused or stopping")
         if current.status is not WorkflowStatus.AWAITING_APPROVAL or current.approval is None:
             raise ValueError("execution is not awaiting approval")
         if decision.approval_id != current.approval.id:
@@ -213,6 +218,68 @@ class DurableApprovalWorkflow:
             command,
             config=self._config(execution_id),
         )
+        return self.get_state(execution_id)
+
+    def prepare(self, alert: Incident | Mapping[str, Any]) -> AgentState:
+        """Persist a new incident before any planning or external work begins."""
+
+        initial = AgentState(incident=normalize_incident(alert), max_retries=self._max_retries)
+        self._graph.invoke(
+            initial,
+            config=self._config(initial.execution_id),
+            interrupt_before=["prepare_planning"],
+        )
+        return self.get_state(initial.execution_id)
+
+    def advance(self, execution_id: UUID) -> AgentState:
+        """Run at most one checkpointed node, preserving the human approval interrupt."""
+
+        current = self.get_state(execution_id)
+        if current.control_status != "running":
+            raise ValueError("execution is paused or stopping")
+        snapshot = self._graph.get_state(self._config(execution_id))
+        if snapshot.next and not snapshot.interrupts:
+            self._graph.invoke(None, config=self._config(execution_id), interrupt_after="*")
+        return self.get_state(execution_id)
+
+    def ready_for_review(self, execution_id: UUID) -> bool:
+        """Distinguish the approval interrupt from a node-boundary checkpoint."""
+
+        snapshot = self._graph.get_state(self._config(execution_id))
+        return bool(snapshot.interrupts)
+
+    def set_control(
+        self, execution_id: UUID, action: Literal["pause", "resume", "terminate", "fail"]
+    ) -> AgentState:
+        """Checkpoint a control at a safe node boundary; termination clears pending work."""
+
+        current = self.get_state(execution_id)
+        if current.status in {
+            WorkflowStatus.COMPLETED,
+            WorkflowStatus.REJECTED,
+            WorkflowStatus.FAILED,
+            WorkflowStatus.TERMINATED,
+        }:
+            raise ValueError("execution has already finished")
+        update: dict[str, Any] = {
+            "control_status": "paused" if action == "pause" else "running",
+            "updated_at": utc_now(),
+            "messages": (
+                *current.messages,
+                AgentMessage(role=MessageRole.USER, name="execution-control", content=action),
+            ),
+        }
+        if action in {"terminate", "fail"}:
+            update["status"] = (
+                WorkflowStatus.TERMINATED if action == "terminate" else WorkflowStatus.FAILED
+            )
+            if action == "fail":
+                update["failure_reason"] = "background execution could not complete safely"
+            self._graph.update_state(
+                self._config(execution_id), update, as_node="pull_request_executor"
+            )
+        else:
+            self._graph.update_state(self._config(execution_id), update)
         return self.get_state(execution_id)
 
     def get_state(self, execution_id: UUID) -> AgentState:

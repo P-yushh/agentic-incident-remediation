@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -15,6 +16,7 @@ from starlette.middleware.base import RequestResponseEndpoint
 
 from agentic_incident_remediation.api.contracts import (
     ApprovalSubmission,
+    ExecutionControlSubmission,
     HealthResponse,
     IncidentSubmission,
 )
@@ -38,17 +40,30 @@ TERMINAL_STATUSES = {
     WorkflowStatus.COMPLETED,
     WorkflowStatus.REJECTED,
     WorkflowStatus.FAILED,
+    WorkflowStatus.TERMINATED,
 }
 _DASHBOARD = Path(__file__).with_name("dashboard.html")
 
 
-def create_app(service: RemediationService) -> FastAPI:
+def create_app(
+    service: RemediationService, *, close_clients: Callable[[], None] | None = None
+) -> FastAPI:
     """Create an API bound to an injected workflow service."""
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        try:
+            yield
+        finally:
+            await asyncio.to_thread(service.close, wait=True)
+            if close_clients is not None:
+                close_clients()
 
     app = FastAPI(
         title="Agentic Incident Remediation",
         version="0.1.0",
         description="Generate, validate, and review infrastructure remediation proposals.",
+        lifespan=lifespan,
     )
     app.state.remediation_service = service
 
@@ -93,8 +108,15 @@ def create_app(service: RemediationService) -> FastAPI:
         response_model=AgentState,
         status_code=status.HTTP_202_ACCEPTED,
     )
-    def start_incident(payload: IncidentSubmission) -> AgentState:
-        return _translate_errors(lambda: service.start(payload.model_dump(mode="json")))
+    def start_incident(
+        payload: IncidentSubmission, background: bool = Query(default=False)
+    ) -> AgentState:
+        operation = service.enqueue if background else service.start
+        return _translate_errors(lambda: operation(payload.model_dump(mode="json")))
+
+    @app.post("/api/executions/{execution_id}/control", response_model=AgentState)
+    def control_execution(execution_id: UUID, payload: ExecutionControlSubmission) -> AgentState:
+        return _translate_errors(lambda: service.control(execution_id, payload.action))
 
     @app.get("/api/executions/{execution_id}", response_model=AgentState)
     def get_execution(execution_id: UUID) -> AgentState:
@@ -141,14 +163,12 @@ def create_live_app() -> FastAPI:
         checkpointer=create_redis_checkpointer(settings.redis_url),
         max_retries=settings.max_reflection_attempts,
     )
-    app = create_app(RemediationService(workflow))
 
-    @app.on_event("shutdown")
     def close_clients() -> None:
         model.close()
         publisher.close()
 
-    return app
+    return create_app(RemediationService(workflow), close_clients=close_clients)
 
 
 async def _state_events(
@@ -161,10 +181,11 @@ async def _state_events(
     last_update = None
     while True:
         state = service.get(execution_id)
-        if state.updated_at != last_update:
+        fingerprint = (state.updated_at, state.control_status, state.review_ready)
+        if fingerprint != last_update:
             payload = state.model_dump(mode="json")
             yield f"event: state\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n"
-            last_update = state.updated_at
+            last_update = fingerprint
         if not follow or state.status in TERMINAL_STATUSES or await request.is_disconnected():
             return
         await asyncio.sleep(0.5)

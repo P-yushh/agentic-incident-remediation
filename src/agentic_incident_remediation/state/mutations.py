@@ -42,6 +42,7 @@ ALLOWED_TRANSITIONS: Mapping[WorkflowStatus, frozenset[WorkflowStatus]] = {
     WorkflowStatus.REJECTED: frozenset(),
     WorkflowStatus.COMPLETED: frozenset(),
     WorkflowStatus.FAILED: frozenset(),
+    WorkflowStatus.TERMINATED: frozenset(),
 }
 
 

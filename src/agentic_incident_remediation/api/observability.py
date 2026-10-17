@@ -48,10 +48,14 @@ class ApiMetrics:
     def render(self) -> bytes:
         return generate_latest(self.registry)
 
+    def record_outcome(self, status: WorkflowStatus) -> None:
+        self._record_terminal(status)
+
     def _record_terminal(self, status: WorkflowStatus) -> None:
         if status in {
             WorkflowStatus.COMPLETED,
             WorkflowStatus.REJECTED,
             WorkflowStatus.FAILED,
+            WorkflowStatus.TERMINATED,
         }:
             self.workflow_outcomes.labels(status=status.value).inc()

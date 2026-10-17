@@ -91,7 +91,7 @@ def create_demo_service() -> RemediationService:
         schema_tools=None,
         checkpointer=InMemorySaver(),
     )
-    return RemediationService(workflow)
+    return RemediationService(workflow, step_delay_seconds=0.75)
 
 
 def create_demo_app() -> FastAPI:

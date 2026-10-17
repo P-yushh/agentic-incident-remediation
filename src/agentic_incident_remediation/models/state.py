@@ -1,6 +1,7 @@
 """Top-level execution state shared by all workflow nodes."""
 
 from enum import StrEnum
+from typing import Literal
 from uuid import UUID, uuid4
 
 from pydantic import AwareDatetime, Field, model_validator
@@ -28,6 +29,7 @@ class WorkflowStatus(StrEnum):
     EXECUTING = "executing"
     COMPLETED = "completed"
     FAILED = "failed"
+    TERMINATED = "terminated"
 
 
 class MessageRole(StrEnum):
@@ -54,6 +56,10 @@ class AgentState(StrictModel):
     execution_id: UUID = Field(default_factory=uuid4)
     incident: Incident
     status: WorkflowStatus = WorkflowStatus.RECEIVED
+    control_status: Literal["running", "paused", "pause_requested", "termination_requested"] = (
+        "running"
+    )
+    review_ready: bool = False
     messages: tuple[AgentMessage, ...] = ()
     plan: RemediationPlan | None = None
     artifacts: tuple[GeneratedArtifact, ...] = ()

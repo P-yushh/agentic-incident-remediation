@@ -1,16 +1,16 @@
 """Typed HTTP request and health contracts."""
 
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
-from pydantic import Field
+from pydantic import AwareDatetime, Field
 
 from agentic_incident_remediation.models import (
     ApprovalDecision,
     IncidentSeverity,
     IncidentType,
 )
-from agentic_incident_remediation.models.base import StrictModel
+from agentic_incident_remediation.models.base import StrictModel, utc_now
 
 
 class IncidentSubmission(StrictModel):
@@ -22,6 +22,7 @@ class IncidentSubmission(StrictModel):
     description: str = Field(min_length=1, max_length=4000)
     severity: IncidentSeverity = IncidentSeverity.MEDIUM
     source: str = Field(default="api", min_length=1, max_length=100)
+    occurred_at: AwareDatetime = Field(default_factory=utc_now)
     labels: dict[str, str] = Field(default_factory=dict)
     context: dict[str, Any] = Field(default_factory=dict)
 
@@ -40,3 +41,9 @@ class HealthResponse(StrictModel):
 
     status: str = "ok"
     service: str = "agentic-incident-remediation"
+
+
+class ExecutionControlSubmission(StrictModel):
+    """One cooperative execution-control request."""
+
+    action: Literal["pause", "resume", "terminate"]
