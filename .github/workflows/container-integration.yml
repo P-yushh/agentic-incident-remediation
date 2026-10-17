@@ -74,6 +74,13 @@ jobs:
           sandbox/terraform-validator
 
       - name: Verify real containers and cross-process Redis recovery
-        run: python -m pytest tests/integration -m integration -vv --maxfail=2
+        id: integration
+        run: >-
+          python -m pytest tests/integration -m integration -vv --maxfail=2
+          --junitxml="${RUNNER_TEMP}/container-integration.xml"
+
+      - name: Report synthetic integration failures
+        if: ${{ always() && steps.integration.outcome != 'skipped' }}
+        run: python tests/integration/report_results.py "${RUNNER_TEMP}/container-integration.xml"
 
       # Results stay in the job log; no artifact uploads, image publication, or paid services.
