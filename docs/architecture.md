@@ -54,3 +54,14 @@ capability.
 
 Prometheus counters expose request totals, workflow starts, human decisions, and terminal outcomes.
 JSON logs include request IDs but never request bodies or credentials.
+
+Approval workflow invocations use synchronous checkpoint durability: each checkpoint is saved
+before the next node runs. This also prevents Redis checkpoint creation from overwriting pending
+approval-interrupt metadata written by the next task. A review-ready flag still requires the real
+native interrupt; an approval record alone is not sufficient.
+
+Redis checkpoint serialization uses an explicit list of the engine's validated domain contracts
+for JSON and MessagePack recovery. Pickle fallback and wildcard application-class reconstruction
+remain disabled. Redis access is still a trusted boundary; never expose the checkpoint database to
+untrusted clients. The container integration suite exercises recovery in a separate Python process,
+including the native approval interrupt and checkpointed execution controls.
