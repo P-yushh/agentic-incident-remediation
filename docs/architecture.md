@@ -54,3 +54,9 @@ capability.
 
 Prometheus counters expose request totals, workflow starts, human decisions, and terminal outcomes.
 JSON logs include request IDs but never request bodies or credentials.
+
+Redis checkpoint serialization uses an explicit list of the engine's validated domain contracts
+for JSON and MessagePack recovery. Pickle fallback and wildcard application-class reconstruction
+remain disabled. Redis access is still a trusted boundary; never expose the checkpoint database to
+untrusted clients. The container integration suite exercises recovery in a separate Python process,
+including the native approval interrupt and checkpointed execution controls.

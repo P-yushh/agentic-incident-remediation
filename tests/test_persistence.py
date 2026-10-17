@@ -7,10 +7,22 @@ from uuid import uuid4
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 
-from agentic_incident_remediation.graph import SelfCorrectingRemediationWorkflow
+from agentic_incident_remediation.demo import FixtureStructuredModel
+from agentic_incident_remediation.graph import (
+    DurableApprovalWorkflow,
+    SelfCorrectingRemediationWorkflow,
+)
 from agentic_incident_remediation.llm import FakeStructuredModel
-from agentic_incident_remediation.models import Incident, IncidentType, WorkflowStatus
+from agentic_incident_remediation.models import (
+    ApprovalResponse,
+    Incident,
+    IncidentType,
+    WorkflowStatus,
+)
+from agentic_incident_remediation.models.base import StrictModel
+from agentic_incident_remediation.operations import FakePullRequestPublisher
 from agentic_incident_remediation.persistence import checkpoint_config, create_redis_checkpointer
+from agentic_incident_remediation.persistence.checkpoints import create_checkpoint_serializer
 from agentic_incident_remediation.sandbox import (
     FakeSandboxRunner,
     SandboxExecution,
@@ -167,3 +179,53 @@ def test_redis_checkpointer_is_initialized_before_use(monkeypatch: pytest.Monkey
     assert events == [("created", "redis://localhost:6379/0"), "setup"]
     with pytest.raises(ValueError, match="cannot be empty"):
         create_redis_checkpointer("  ")
+
+
+def test_redis_json_serialization_restores_typed_state_and_native_approval() -> None:
+    serializer = create_checkpoint_serializer()
+    saver = InMemorySaver(serde=serializer)
+    publisher = FakePullRequestPublisher()
+    original = DurableApprovalWorkflow(
+        FixtureStructuredModel(),
+        FakeSandboxRunner([passing_execution()]),
+        publisher,
+        repository="example/synthetic-integration",
+        checkpointer=saver,
+    )
+    pending = original.start(make_incident())
+    restarted = DurableApprovalWorkflow(
+        FakeStructuredModel([]),
+        FakeSandboxRunner([]),
+        publisher,
+        repository="example/synthetic-integration",
+        checkpointer=saver,
+    )
+
+    recovered = restarted.get_state(pending.execution_id)
+
+    assert recovered == pending
+    assert restarted.ready_for_review(pending.execution_id)
+    assert recovered.approval is not None
+    rejected = restarted.resume(
+        pending.execution_id,
+        ApprovalResponse(
+            approval_id=recovered.approval.id,
+            decision="rejected",
+            decided_by="serializer-test-reviewer",
+        ),
+    )
+    assert rejected.status is WorkflowStatus.REJECTED
+    assert publisher.proposals == []
+
+
+def test_checkpoint_serializer_does_not_revive_unknown_models_or_enable_pickle() -> None:
+    class UntrustedContract(StrictModel):
+        value: str
+
+    serializer = create_checkpoint_serializer()
+    encoded = serializer.dumps_typed(UntrustedContract(value="untrusted"))
+
+    assert not isinstance(serializer.loads_typed(encoded), UntrustedContract)
+    assert serializer.pickle_fallback is False
+    with pytest.raises(NotImplementedError):
+        serializer.loads_typed(("pickle", b"not-a-pickle"))
