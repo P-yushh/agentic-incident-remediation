@@ -45,6 +45,7 @@ jobs:
       AIR_RUN_CONTAINER_TESTS: '1'
       AIR_INTEGRATION_REDIS_URL: redis://127.0.0.1:6379/0
       HF_TOKEN: ''
+      GEMINI_API_KEY: ''
       GITHUB_TOKEN: ''
       PIP_NO_CACHE_DIR: '1'
     steps:
