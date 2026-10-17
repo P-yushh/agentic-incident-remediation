@@ -23,7 +23,7 @@ from agentic_incident_remediation.api.contracts import (
 from agentic_incident_remediation.api.service import RemediationService
 from agentic_incident_remediation.config import get_settings
 from agentic_incident_remediation.graph import DurableApprovalWorkflow
-from agentic_incident_remediation.llm import HuggingFaceStructuredModel
+from agentic_incident_remediation.llm import create_live_model
 from agentic_incident_remediation.logging import configure_logging
 from agentic_incident_remediation.models import (
     AgentState,
@@ -147,11 +147,11 @@ def create_app(
 
 
 def create_live_app() -> FastAPI:
-    """Build the live Hugging Face, Redis, Docker, and GitHub runtime."""
+    """Build the configured live model, Redis, Docker, and GitHub runtime."""
 
     settings = get_settings()
     configure_logging(settings)
-    model = HuggingFaceStructuredModel.from_settings(settings)
+    model = create_live_model(settings)
     publisher = GitHubPullRequestPublisher.from_settings(settings)
     workflow = DurableApprovalWorkflow(
         model,

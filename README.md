@@ -15,8 +15,8 @@ changes to a real Kubernetes cluster or cloud account automatically.
 ## Development prerequisites
 
 - Python 3.12
-- Docker with Docker Compose
-- A Hugging Face access token only when running live-model demonstrations
+- Docker with Docker Compose only for live validation (not needed for offline tests or demo)
+- A Gemini API key or Hugging Face access token only when running hosted-model inference
 
 ## Local setup
 
@@ -51,8 +51,8 @@ Automated tests use deterministic model doubles and do not consume hosted-model 
 - Redis-backed LangGraph checkpoints keyed by execution ID, with state restoration and history
 - A durable native interrupt that pauses until a matching human approval or rejection arrives
 - An idempotent GitHub publisher restricted to branches, one generated artifact, and pull requests
-- A Hugging Face router adapter plus deterministic offline model doubles
-- Environment-based configuration for Redis, Hugging Face inference, and GitHub operations
+- Gemini Developer API and Hugging Face router adapters plus deterministic offline model doubles
+- Environment-based configuration for Redis, model provider selection, and GitHub operations
 - JSON structured logging
 - A FastAPI control plane with execution lookup, approval endpoints, and server-sent state events
 - A responsive review console plus health and Prometheus metrics endpoints
@@ -68,7 +68,7 @@ The browser console and API expose this lifecycle without weakening its approval
 
 ## Credential-free demo
 
-Run the complete system locally without Hugging Face, Redis, Docker, GitHub credentials, or any
+Run the complete system locally without Gemini, Hugging Face, Redis, Docker, GitHub credentials, or any
 billing risk:
 
 ```bash
@@ -107,9 +107,9 @@ background steps so state changes and controls are visible; live processing adds
 
 ### Live integrations
 
-Live mode uses Hugging Face inference, Redis checkpoints, Docker validators, and the GitHub API.
-Build the validator images described below, configure `HF_TOKEN` and `GITHUB_TOKEN` in a local
-environment, and run:
+Live mode uses the selected hosted model, Redis checkpoints, Docker validators, and the GitHub API.
+Build the validator images described below, configure the selected model credential and
+`GITHUB_TOKEN` in a local environment, and run:
 
 ```bash
 docker compose up -d redis
@@ -118,6 +118,47 @@ agentic-remediation-api
 
 Use a disposable repository and a tightly scoped token for integration testing. Human approval
 may create a real branch and pull request, but it cannot merge or apply the generated changes.
+
+#### Selecting Gemini
+
+Set these values in the Git-ignored local `.env`; never commit a real key:
+
+```dotenv
+AIR_MODEL_PROVIDER=gemini
+AIR_MODEL_NAME=gemini-3.8-flash
+AIR_MODEL_REASONING_EFFORT=low
+AIR_MODEL_MAX_OUTPUT_TOKENS=1200
+AIR_MAX_REFLECTION_ATTEMPTS=1
+GEMINI_API_KEY=replace-with-your-local-key
+```
+
+The native Gemini adapter uses JSON-schema-constrained output, then independently validates it
+against the same Pydantic contracts and artifact safety rules as other providers. It sends the
+key in a header rather than a URL, makes one HTTP request per model invocation, and does not retry
+quota errors or silently switch providers. Blocked, truncated, malformed, and unsafe output fails
+closed. Reasoning level is sent for Gemini 3/4 models; Gemini 2.5 overrides omit that setting.
+No new SDK dependency is needed.
+
+For no-billing use, choose an AI Studio project with billing **unset**, confirm the model's current
+free-tier allowance in AI Studio, and do not enable billing. Application token limits are not a
+billing control: availability, quotas, and eligibility are provider-managed and may change. A
+normal successful execution uses two model calls (plan and artifact); each correction needs
+another generation call, and parallel incidents share project quota. A quota error stops the
+workflow; it does not buy credits. Use synthetic incident data only, and review Google's
+[pricing and data-use terms](https://ai.google.dev/gemini-api/docs/pricing) before hosted use.
+
+Automated provider wiring and error-handling tests use mocked HTTP, not a hosted service.
+A manual smoke test on October 18, 2026 verified one real `gemini-3.8-flash` request: HTTP 200,
+302 total tokens, and a locally validated `RemediationPlan` with the matching incident ID and
+ordered generate/validate/review steps. This verifies structured planning, not artifact generation
+or the complete live workflow. Live smoke tests remain separate, deliberate steps; the full live
+application also still requires Redis, Docker validation, and a GitHub token.
+The credential-free demo never reads or uses hosted-model keys, even when `.env` selects Gemini.
+
+Hugging Face remains available with `AIR_MODEL_PROVIDER=huggingface`,
+`AIR_MODEL_NAME=openai/gpt-oss-20b:cheapest`, and `HF_TOKEN`. No free hosted credits are assumed.
+If the model name is omitted entirely, settings choose a provider-specific default. An explicit
+model name is never rewritten automatically, so change both values when switching providers.
 
 ### Real container integration checks
 
@@ -159,9 +200,9 @@ approval -> rejected -> stop without repository changes
          `-- approved -> publish validated artifact branch -> create pull request -> completed
 ```
 
-Automated tests use `FakeStructuredModel`; they never call Hugging Face. A live demonstration can
-construct `HuggingFaceStructuredModel.from_settings(get_settings())` after setting `HF_TOKEN`.
-The live adapter requests JSON output constrained by the `RemediationPlan` and `ArtifactDraft`
+Automated tests use deterministic models and mocked HTTP; they never call a hosted provider.
+`create_live_model(get_settings())` selects the explicitly configured provider with no fallback.
+The live adapters request JSON output constrained by the `RemediationPlan` and `ArtifactDraft`
 schemas and does not execute or apply the proposed infrastructure changes.
 
 Generated files are proposals only. They must remain inside `remediations/`, use a format matching

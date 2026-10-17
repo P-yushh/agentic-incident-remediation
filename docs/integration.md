@@ -3,7 +3,7 @@
 The `container-integration` workflow verifies real Docker validation and Redis checkpoints without
 requiring Docker on a developer's laptop. It runs on GitHub-hosted Ubuntu, not on a self-hosted
 machine. All inputs are synthetic, model outputs are deterministic, and the publisher is a test
-double that must receive no proposals. It neither calls Hugging Face nor creates a remediation PR.
+double that must receive no proposals. It neither calls a hosted model nor creates a remediation PR.
 
 ## Checks
 
@@ -37,8 +37,8 @@ or cloud account is needed for this workflow. Repository workflow permissions re
 - The job is restricted to public repositories and skips if repository visibility changes.
 - No Actions cache, artifact upload, container registry publication, or persistent cloud service.
 - A 25-minute job limit and per-branch cancellation bound accidental repeated execution.
-- No hosted model calls and no `secrets` references. GitHub and Hugging Face tokens are explicitly
-  empty in the test process; checkout does not retain its temporary credentials.
+- No hosted model calls and no `secrets` references. GitHub, Hugging Face, and Gemini credentials
+  are explicitly empty in the test process; checkout does not retain its temporary credentials.
 
 GitHub documents standard hosted runner execution as free for public repositories:
 [GitHub Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions).
@@ -67,5 +67,8 @@ Validators run with the production runner's network disabled, read-only root fil
 unprivileged user, no host mounts, and CPU/memory/process/time limits. They validate proposals;
 they do not run `kubectl apply`, `terraform plan`, or `terraform apply`.
 
-Hugging Face inference and an explicitly human-approved test PR remain separate live integration
-stages. The deterministic offline dashboard remains usable independently of all these services.
+Gemini or Hugging Face inference and an explicitly human-approved test PR remain separate live
+integration stages. Provider adapter and live-app wiring tests use mocked HTTP and synthetic keys;
+they do not establish live inference availability or response quality. See the
+[provider configuration](../README.md#selecting-gemini) for no-billing setup and boundaries.
+The deterministic offline dashboard remains usable independently of all these services.

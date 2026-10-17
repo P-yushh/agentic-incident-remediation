@@ -38,10 +38,17 @@ The offline demo uses an in-memory checkpointer and deterministic adapters. It e
 API, typed state, graph routing, approval interrupt, and publisher capability boundary without
 network calls or credentials.
 
-Live mode swaps in Hugging Face inference, Redis checkpoints, locked-down Docker validation, and
-the GitHub API. It requires both `HF_TOKEN` and `GITHUB_TOKEN`; approving a live execution may
-create a branch and pull request in the configured repository. It still has no apply or merge
-capability.
+Live mode swaps in the explicitly selected Gemini or Hugging Face adapter, Redis checkpoints,
+locked-down Docker validation, and the GitHub API. It requires `GEMINI_API_KEY` or `HF_TOKEN`
+for the selected provider, plus `GITHUB_TOKEN`; approving a live execution may create a branch and
+pull request in the configured repository. It still has no apply or merge capability.
+
+The provider factory never falls back across credentials or providers. Gemini uses the native
+`generateContent` API with header authentication, bounded output, JSON-schema-constrained replies,
+and local strict validation. Blocked or incomplete output and transport/quota failures stop that
+model invocation without automatic retries. The deterministic reflection ceiling still bounds
+artifact corrections. Free-tier quotas and billing status are controlled in the provider account,
+not guaranteed by this application. Offline demo and CI modes remain independent of both providers.
 
 ## Failure behavior
 

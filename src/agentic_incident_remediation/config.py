@@ -2,6 +2,7 @@
 
 from enum import StrEnum
 from functools import lru_cache
+from typing import Any
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -29,16 +30,25 @@ class ModelProvider(StrEnum):
     """Model providers understood by the application configuration."""
 
     HUGGINGFACE = "huggingface"
+    GEMINI = "gemini"
     FAKE = "fake"
     FIXTURE = "fixture"
 
 
 class ReasoningEffort(StrEnum):
-    """Portable reasoning-effort values supported by the first provider adapter."""
+    """Reasoning levels used by Hugging Face and Gemini 3-series adapters."""
 
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
+
+
+def _default_model_name(values: dict[str, Any]) -> str:
+    return (
+        "gemini-3.8-flash"
+        if values.get("model_provider") is ModelProvider.GEMINI
+        else "openai/gpt-oss-20b:cheapest"
+    )
 
 
 class Settings(BaseSettings):
@@ -67,17 +77,22 @@ class Settings(BaseSettings):
     github_token: SecretStr | None = Field(default=None, validation_alias="GITHUB_TOKEN")
 
     model_provider: ModelProvider = ModelProvider.HUGGINGFACE
-    model_name: str = "openai/gpt-oss-20b:cheapest"
+    model_name: str = Field(default_factory=_default_model_name, min_length=1)
     model_reasoning_effort: ReasoningEffort = ReasoningEffort.LOW
     model_max_output_tokens: int = Field(default=1200, ge=128, le=8192)
     hf_token: SecretStr | None = Field(default=None, validation_alias="HF_TOKEN")
+    gemini_api_key: SecretStr | None = Field(default=None, validation_alias="GEMINI_API_KEY")
 
     @property
     def live_model_configured(self) -> bool:
         """Return whether the selected live provider has its required credential."""
 
         if self.model_provider is ModelProvider.HUGGINGFACE:
-            return self.hf_token is not None and bool(self.hf_token.get_secret_value())
+            return self.hf_token is not None and bool(self.hf_token.get_secret_value().strip())
+        if self.model_provider is ModelProvider.GEMINI:
+            return self.gemini_api_key is not None and bool(
+                self.gemini_api_key.get_secret_value().strip()
+            )
         return True
 
     def safe_summary(self) -> dict[str, str | int | bool]:

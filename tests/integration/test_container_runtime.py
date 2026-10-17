@@ -65,7 +65,7 @@ def worker(mode: str, *arguments: str) -> dict[str, Any]:
     assert parsed.scheme == "redis" and parsed.hostname in {"localhost", "127.0.0.1"}, (
         "Use only the disposable, loopback-bound integration Redis service"
     )
-    environment = {**os.environ, "HF_TOKEN": "", "GITHUB_TOKEN": ""}
+    environment = {**os.environ, "HF_TOKEN": "", "GEMINI_API_KEY": "", "GITHUB_TOKEN": ""}
     result = subprocess.run(
         [sys.executable, str(DIRECTORY / "checkpoint_worker.py"), mode, *arguments],
         env=environment,
