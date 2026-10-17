@@ -195,7 +195,11 @@ class DurableApprovalWorkflow:
             incident=incident,
             max_retries=self._max_retries,
         )
-        self._graph.invoke(initial_state, config=self._config(initial_state.execution_id))
+        # Persist each checkpoint before its tasks write results or approval interrupts.
+        # Redis pending-write metadata must not race with an asynchronous checkpoint save.
+        self._graph.invoke(
+            initial_state, config=self._config(initial_state.execution_id), durability="sync"
+        )
         return self.get_state(initial_state.execution_id)
 
     def resume(
@@ -217,6 +221,7 @@ class DurableApprovalWorkflow:
         self._graph.invoke(
             command,
             config=self._config(execution_id),
+            durability="sync",
         )
         return self.get_state(execution_id)
 
@@ -228,6 +233,7 @@ class DurableApprovalWorkflow:
             initial,
             config=self._config(initial.execution_id),
             interrupt_before=["prepare_planning"],
+            durability="sync",
         )
         return self.get_state(initial.execution_id)
 
@@ -239,7 +245,9 @@ class DurableApprovalWorkflow:
             raise ValueError("execution is paused or stopping")
         snapshot = self._graph.get_state(self._config(execution_id))
         if snapshot.next and not snapshot.interrupts:
-            self._graph.invoke(None, config=self._config(execution_id), interrupt_after="*")
+            self._graph.invoke(
+                None, config=self._config(execution_id), interrupt_after="*", durability="sync"
+            )
         return self.get_state(execution_id)
 
     def ready_for_review(self, execution_id: UUID) -> bool:

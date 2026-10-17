@@ -2,6 +2,7 @@
 
 import json
 from typing import Any
+from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
@@ -229,3 +230,33 @@ def test_checkpoint_serializer_does_not_revive_unknown_models_or_enable_pickle()
     assert serializer.pickle_fallback is False
     with pytest.raises(NotImplementedError):
         serializer.loads_typed(("pickle", b"not-a-pickle"))
+
+
+def test_approval_execution_persists_before_advancing_at_every_entry_point() -> None:
+    workflow = DurableApprovalWorkflow(
+        FixtureStructuredModel(),
+        FakeSandboxRunner([passing_execution(), passing_execution()]),
+        FakePullRequestPublisher(),
+        repository="example/synthetic-integration",
+        checkpointer=InMemorySaver(),
+    )
+    with patch.object(workflow._graph, "invoke", wraps=workflow._graph.invoke) as invoke:
+        pending = workflow.start(make_incident())
+        assert pending.approval is not None
+        workflow.resume(
+            pending.execution_id,
+            ApprovalResponse(
+                approval_id=pending.approval.id,
+                decision="rejected",
+                decided_by="durability-test-reviewer",
+            ),
+        )
+        prepared = workflow.prepare(make_incident())
+        for _ in range(10):
+            workflow.advance(prepared.execution_id)
+            if workflow.ready_for_review(prepared.execution_id):
+                break
+        assert workflow.ready_for_review(prepared.execution_id)
+
+    assert invoke.call_count > 3  # start, resume, prepare, and node-by-node advance
+    assert all(call.kwargs.get("durability") == "sync" for call in invoke.call_args_list)
