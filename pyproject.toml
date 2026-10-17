@@ -44,6 +44,9 @@ packages = ["src/agentic_incident_remediation"]
 addopts = "--strict-config --strict-markers -q"
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+  "integration: opt-in real Docker and Redis checks; no hosted models or GitHub writes",
+]
 
 [tool.coverage.run]
 branch = true

@@ -119,6 +119,16 @@ agentic-remediation-api
 Use a disposable repository and a tightly scoped token for integration testing. Human approval
 may create a real branch and pull request, but it cannot merge or apply the generated changes.
 
+### Real container integration checks
+
+The `container-integration` GitHub Actions workflow builds both validator images and tests them
+against a real Redis service on a standard Ubuntu runner. It checks valid and invalid artifacts,
+approval recovery across separate Python processes, and checkpointed pause/resume/termination.
+Hosted model calls and GitHub publication are deliberately excluded; these checks need no secrets.
+The normal local suite skips the seven opt-in integration checks, so local Docker is not required.
+
+See [container integration testing](docs/integration.md) for scope, execution, and cost safeguards.
+
 ## HTTP API
 
 | Method | Route | Purpose |
