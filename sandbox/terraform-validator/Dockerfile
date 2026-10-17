@@ -5,8 +5,7 @@ WORKDIR /bootstrap
 RUN printf 'terraform {\n  required_providers {\n    aws = {\n      source = "hashicorp/aws"\n      version = "=%s"\n    }\n  }\n}\n' "${AWS_PROVIDER_VERSION}" > versions.tf \
     && terraform init -backend=false -input=false -no-color \
     && mkdir -p /provider-cache \
-    && find .terraform/providers -type f -name 'terraform-provider-aws*' \
-      -exec cp '{}' /provider-cache/ ';'
+    && cp -R .terraform/providers/. /provider-cache/
 
 FROM hashicorp/terraform:1.13.3
 

@@ -23,3 +23,9 @@ no network, a read-only root filesystem, a temporary 16 MiB `/tmp`, dropped Linu
 Image builds require network access to fetch the pinned Kubernetes schema and Terraform provider.
 That build-time access is separate from artifact validation and should be moved to a trusted image
 build pipeline with digest and checksum verification before production use.
+
+The Terraform image preserves the unpacked provider mirror hierarchy under `/opt/providers`:
+`registry.terraform.io/hashicorp/aws/<version>/<platform>/`. Do not flatten provider binaries into
+the mirror root: current Terraform discovery requires the registry, namespace, version, and target
+directories. Runtime initialization can link the read-only bundled provider into its temporary
+working directory without downloading or unpacking a provider there.
