@@ -86,3 +86,9 @@ def test_failed_state_requires_reason() -> None:
 def test_state_rejects_retry_count_above_limit() -> None:
     with pytest.raises(ValidationError):
         AgentState(incident=make_incident(), retry_count=4, max_retries=3)
+
+
+@pytest.mark.parametrize("status", [WorkflowStatus.APPROVED, WorkflowStatus.REJECTED])
+def test_decision_status_requires_matching_approval_record(status: WorkflowStatus) -> None:
+    with pytest.raises(ValidationError, match="record"):
+        AgentState(incident=make_incident(), status=status)

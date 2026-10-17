@@ -59,6 +59,13 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     max_reflection_attempts: int = Field(default=3, ge=1, le=10)
 
+    github_repository: str = Field(
+        default="P-yushh/agentic-incident-remediation",
+        pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
+    )
+    github_base_branch: str = Field(default="main", min_length=1, max_length=100)
+    github_token: SecretStr | None = Field(default=None, validation_alias="GITHUB_TOKEN")
+
     model_provider: ModelProvider = ModelProvider.HUGGINGFACE
     model_name: str = "openai/gpt-oss-20b:cheapest"
     model_reasoning_effort: ReasoningEffort = ReasoningEffort.LOW
@@ -84,6 +91,9 @@ class Settings(BaseSettings):
             "model_name": self.model_name,
             "model_max_output_tokens": self.model_max_output_tokens,
             "live_model_configured": self.live_model_configured,
+            "github_repository": self.github_repository,
+            "github_base_branch": self.github_base_branch,
+            "github_operations_configured": self.github_token is not None,
         }
 
 

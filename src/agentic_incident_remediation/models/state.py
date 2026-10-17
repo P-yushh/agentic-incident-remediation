@@ -1,14 +1,16 @@
 """Top-level execution state shared by all workflow nodes."""
 
 from enum import StrEnum
+from typing import Literal
 from uuid import UUID, uuid4
 
 from pydantic import AwareDatetime, Field, model_validator
 
-from agentic_incident_remediation.models.approval import ApprovalRecord
+from agentic_incident_remediation.models.approval import ApprovalDecision, ApprovalRecord
 from agentic_incident_remediation.models.artifact import GeneratedArtifact
 from agentic_incident_remediation.models.base import StrictModel, utc_now
 from agentic_incident_remediation.models.incident import Incident
+from agentic_incident_remediation.models.operation import PullRequestRecord
 from agentic_incident_remediation.models.plan import RemediationPlan
 from agentic_incident_remediation.models.validation import ValidationResult
 
@@ -27,6 +29,7 @@ class WorkflowStatus(StrEnum):
     EXECUTING = "executing"
     COMPLETED = "completed"
     FAILED = "failed"
+    TERMINATED = "terminated"
 
 
 class MessageRole(StrEnum):
@@ -53,6 +56,10 @@ class AgentState(StrictModel):
     execution_id: UUID = Field(default_factory=uuid4)
     incident: Incident
     status: WorkflowStatus = WorkflowStatus.RECEIVED
+    control_status: Literal["running", "paused", "pause_requested", "termination_requested"] = (
+        "running"
+    )
+    review_ready: bool = False
     messages: tuple[AgentMessage, ...] = ()
     plan: RemediationPlan | None = None
     artifacts: tuple[GeneratedArtifact, ...] = ()
@@ -61,6 +68,7 @@ class AgentState(StrictModel):
     retry_count: int = Field(default=0, ge=0)
     max_retries: int = Field(default=3, ge=1, le=10)
     approval: ApprovalRecord | None = None
+    pull_request: PullRequestRecord | None = None
     failure_reason: str | None = Field(default=None, min_length=1, max_length=2000)
     created_at: AwareDatetime = Field(default_factory=utc_now)
     updated_at: AwareDatetime = Field(default_factory=utc_now)
@@ -75,4 +83,18 @@ class AgentState(StrictModel):
             raise ValueError("failed state requires a failure_reason")
         if self.status is not WorkflowStatus.FAILED and self.failure_reason is not None:
             raise ValueError("failure_reason is only valid for failed state")
+        if self.status is WorkflowStatus.COMPLETED and self.pull_request is None:
+            raise ValueError("completed state requires a pull request record")
+        if self.pull_request is not None and self.status is not WorkflowStatus.COMPLETED:
+            raise ValueError("pull request record is only valid for completed state")
+        if self.status in {
+            WorkflowStatus.APPROVED,
+            WorkflowStatus.EXECUTING,
+            WorkflowStatus.COMPLETED,
+        } and (self.approval is None or self.approval.decision is not ApprovalDecision.APPROVED):
+            raise ValueError("approved execution status requires an approved record")
+        if self.status is WorkflowStatus.REJECTED and (
+            self.approval is None or self.approval.decision is not ApprovalDecision.REJECTED
+        ):
+            raise ValueError("rejected status requires a rejected approval record")
         return self
