@@ -1,9 +1,12 @@
 """Redis checkpoint construction and execution identity helpers."""
 
+from collections.abc import Iterator
+from typing import Any
 from uuid import UUID
 
 from langchain_core.runnables import RunnableConfig
-from langgraph.checkpoint.redis import RedisSaver
+from langgraph.checkpoint.base import CheckpointTuple
+from langgraph.checkpoint.redis import RedisSaver as BaseRedisSaver
 from langgraph.checkpoint.redis.jsonplus_redis import JsonPlusRedisSerializer
 
 from agentic_incident_remediation.models import (
@@ -18,6 +21,27 @@ from agentic_incident_remediation.models import (
     ValidationFinding,
     ValidationResult,
 )
+
+
+class RedisSaver(BaseRedisSaver):
+    """Hydrate history through the same typed read path as individual checkpoints."""
+
+    def list(
+        self,
+        config: RunnableConfig | None,
+        *,
+        filter: dict[str, Any] | None = None,
+        before: RunnableConfig | None = None,
+        limit: int | None = None,
+    ) -> Iterator[CheckpointTuple]:
+        # The upstream list path can return inline constructor dictionaries without
+        # decoding them. Use its public per-checkpoint reader and our existing strict
+        # serializer allowlist; do not accept raw constructors or broaden revival rules.
+        for entry in super().list(config, filter=filter, before=before, limit=limit):
+            hydrated = self.get_tuple(entry.config)
+            if hydrated is None:
+                raise LookupError("a listed history checkpoint could not be restored")
+            yield hydrated
 
 
 def create_checkpoint_serializer() -> JsonPlusRedisSerializer:

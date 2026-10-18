@@ -72,3 +72,9 @@ for JSON and MessagePack recovery. Pickle fallback and wildcard application-clas
 remain disabled. Redis access is still a trusted boundary; never expose the checkpoint database to
 untrusted clients. The container integration suite exercises recovery in a separate Python process,
 including the native approval interrupt and checkpointed execution controls.
+
+Checkpoint history entries are reloaded through the same typed Redis reader used for individual
+checkpoints. This avoids passing raw inline constructor dictionaries from the Redis listing path
+into strict domain validation. The serializer allowlist and disabled pickle fallback are unchanged.
+History enumeration incurs one additional typed read per entry and fails closed if a listed entry
+has disappeared. Container integration checks exercise history in the fresh recovery process.

@@ -90,6 +90,7 @@ def test_api_approval_checkpoint_survives_a_fresh_process(kind: str) -> None:
     fresh = worker("recover", "--execution-id", pending["execution_id"])
 
     assert fresh["recovered"] == pending
+    assert fresh["history_size"] > 1
     assert fresh["rejected"]["status"] == "rejected"
     assert fresh["rejected"]["pull_request"] is None
     assert fresh["rejected"]["approval"]["id"] == pending["approval"]["id"]
