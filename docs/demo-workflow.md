@@ -9,6 +9,7 @@ merges a remediation PR, or configures billing.
 | Mode | Model | Validation | Persistence | Publication |
 | --- | --- | --- | --- | --- |
 | Local offline console | Deterministic fixtures | Simulated results | In-memory | Simulated PR |
+| Actions-backed dashboard | Explicitly consented Gemini calls on GitHub | Real Docker on GitHub | Local SQLite history + remote Redis review bundle | GitHub required review, then real PR |
 | Reviewed Actions demo | At most two Gemini invocations | Real Docker kubeconform | Original Redis checkpoints carried in an RDB snapshot | Real PR, only after human review |
 | Local live console | Configured Gemini or Hugging Face adapter | Real Docker validators | Redis | Real PR, only after approval in the console |
 
@@ -68,9 +69,9 @@ It does not validate Gemini billing eligibility, quota, or GitHub PR-creation po
 ```text
 Manual dispatch on main (explicit maximum-two-call consent)
   → required-reviewer setup check
-  → fresh synthetic OOM alert through the actual incident API
+  → selected synthetic OOM, CrashLoop or Terraform alert through the actual incident API
   → Gemini planner → Gemini generator (shared hard budget: 2)
-  → real isolated kubeconform validation
+  → real isolated kubeconform or Terraform validation, selected by artifact family
   → native pending approval interrupt + Redis checkpoint history
   → downloadable review bundle; prepare runner exits
   → YOU inspect proposal + validation evidence and approve the environment
@@ -82,12 +83,15 @@ Manual dispatch on main (explicit maximum-two-call consent)
 ```
 
 1. Open **Actions → reviewed-live-demo → Run workflow**, select `main`, and explicitly confirm
-   the two-call demo. This is not permission for an automatic rerun. Normal CI never calls Gemini.
+   the two-call demo and choose one scenario. This is not permission for an automatic rerun.
+   Normal CI never calls Gemini.
 2. Wait for **prepare** to complete. Its summary contains the execution ID, native approval ID,
    artifact checksum, and bundle checksum. Download the run's **review-bundle-…** artifact.
-3. Inspect `proposal.yaml` and `manifest.json`: check the intended memory change, file path,
+3. Inspect `proposal.yaml` and `manifest.json`: check the selected scenario's intended change, file path,
    validation result, pending decision and synthetic workload context. `dump.rdb` carries the
    original checkpoint data and interrupt, rather than a reconstructed artifact-only state.
+   The internal bundle filename remains `proposal.yaml` for compatibility even for Terraform;
+   its native artifact path and dashboard download use the correct `.tf` extension.
 4. Only if satisfied, use **Review deployments → remediation-demo-review → Approve and deploy**.
    GitHub's button says “deploy,” but here it authorizes **PR publication only**. The script
    reads GitHub's actual human review record and records that reviewer in the native approval.
@@ -144,8 +148,10 @@ Build the validator images and configure credentials as described in the README 
 | --- | --- |
 | Prior combined live inference/validation/recovery | [Run 39118745681](https://github.com/P-yushh/agentic-incident-remediation/actions/runs/39118745681), source `1f36018`: Kubernetes + Terraform, four Gemini invocations, real validators, Redis native review and fresh-process history recovery. No publication. |
 | Prior real publisher | [PR #9](https://github.com/P-yushh/agentic-incident-remediation/pull/9): application approval/publisher with saved synthetic live-validated output. A separate publication-only test, not one continuous fresh-incident run. |
-| New reviewed Actions workflow | Implemented with offline continuity/safety tests. A first real hosted run and its human review are still required; the two prior results do not prove this new workflow passed. |
-| New RDB handoff test | Opt-in container CI test: fixture model, real kubeconform + Redis snapshot/restart, fresh-process approval and simulated publisher. No hosted inference or real GitHub writes. |
+| Reviewed Actions workflow | [Run 39124344483](https://github.com/P-yushh/agentic-incident-remediation/actions/runs/39124344483), source `2252b60`: fresh synthetic Kubernetes incident, two Gemini calls, real kubeconform, original Redis checkpoint handoff, owner approval and real [PR #11](https://github.com/P-yushh/agentic-incident-remediation/pull/11). Publication used zero additional model calls; no merge or deployment. |
+| RDB handoff tests | Opt-in container CI tests for all three scenarios: fixture model, real kubeconform/Terraform + Redis snapshot/restart, fresh-process approval and simulated publisher. No hosted inference or real GitHub writes. |
 
 Automated tests intentionally use fixture models or mocked HTTP. Only a successfully completed
-`reviewed-live-demo` run with its linked real PR establishes the new continuous live path.
+`reviewed-live-demo` run with its linked real PR establishes a continuous live path for that case.
+The historical OOM run above does not establish a fresh dashboard-driven hosted run of all
+three scenarios in the new multi-scenario implementation.

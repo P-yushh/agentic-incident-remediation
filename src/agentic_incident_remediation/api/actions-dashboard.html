@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en" data-theme="sand-teal">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Incident workspace · Remediation</title>
+  <link rel="stylesheet" href="/actions-dashboard.css">
+  <script src="/actions-dashboard.js" defer></script>
+</head>
+<body id="air-preview">
+  <div class="air-shell">
+    <aside class="air-sidebar" aria-label="Workspace navigation">
+      <div class="air-brand"><span class="air-mark" aria-hidden="true">↳</span>Remediation</div>
+      <nav class="air-nav" aria-label="Sections">
+        <button class="air-nav-item is-current" id="nav-incidents" aria-current="page"><span aria-hidden="true">▤</span>Incidents</button>
+        <button class="air-nav-item" id="nav-proposals"><span aria-hidden="true">⑂</span>Proposals</button>
+        <button class="air-nav-item" id="nav-policy"><span aria-hidden="true">◇</span>Approval policy</button>
+      </nav>
+      <div class="air-side-bottom"><p class="air-subtle"><span class="air-avatar">PY</span>Local workspace</p><p class="air-subtle">GitHub Actions execution</p></div>
+    </aside>
+    <div class="air-body">
+      <header class="air-topbar"><div class="air-crumb">Workspace <span>/ Incidents</span></div><span class="air-demo"><span class="air-dot"></span>ACTIONS · SYNTHETIC</span></header>
+      <main class="air-page">
+        <div class="air-titlebar"><div><h1>Incident workspace</h1><p>From an infrastructure alert to a reviewed change.</p></div><button class="air-button primary" id="open-simulator" type="button" aria-haspopup="dialog" aria-controls="simulator"><span aria-hidden="true">＋</span>Simulate incident</button></div>
+        <details class="air-connection"><summary id="runtime-mode">Checking Actions connection…</summary><p id="actions-readiness" role="status">Checking GitHub setup without calling a model…</p><p>Progress is polled from GitHub. No infrastructure is applied. Approval happens in GitHub.</p></details>
+        <section class="air-workspace" aria-label="Incident investigation and review">
+          <aside class="air-inbox" aria-labelledby="queue-heading">
+            <div class="air-inbox-head"><h2 id="queue-heading">Incident queue</h2><span class="air-subtle" id="queue-count">00</span></div>
+            <p class="air-subtle" id="queue-empty">No saved incidents. Simulate an incident or load an existing run.</p>
+            <ul id="queue" aria-label="Saved Actions runs"></ul>
+            <p id="queue-error" class="error" role="alert"></p>
+            <p class="air-inbox-note" id="queue-scope">Saved locally across refreshes. Remote artifacts expire after one day.</p>
+            <details class="air-import"><summary>Load existing run</summary><form id="import-run-form"><label for="import-run">Existing GitHub run ID (read-only)</label><input id="import-run" inputmode="numeric" pattern="[0-9]+" required><button class="air-button" type="submit">Load existing run</button></form></details>
+          </aside>
+          <article class="air-detail" aria-label="Selected execution">
+            <div class="air-detail-head">
+              <div class="air-meta"><span id="run-label">NO INCIDENT SELECTED</span><span class="air-severity" id="scenario-label">Synthetic incident</span><span class="air-label" id="status">Not started</span></div>
+              <h2 id="execution" tabindex="-1">Select an incident</h2>
+              <p class="air-detail-desc" id="execution-description">Explore its investigation, proposed fix, and activity.</p>
+              <p class="air-timer"><span id="elapsed-label">Elapsed</span> <time id="elapsed">00:00</time><span id="elapsed-note"></span></p>
+              <aside class="air-failure" id="run-failure" role="alert" hidden><h3 id="failure-heading">Workflow failed</h3><p id="failure-detail"></p><a id="failure-link" target="_blank" rel="noopener noreferrer" hidden>Inspect failed job ↗</a></aside>
+            </div>
+            <div class="air-workflow" aria-label="Remediation progress"><ol class="air-steps" id="actions-progress"></ol><p class="air-subtle" id="job-step"></p></div>
+            <div class="air-tabs" role="tablist" aria-label="Incident details">
+              <button class="air-tab" id="tab-investigation" role="tab" data-tab="investigation" aria-controls="panel-investigation" aria-selected="false" tabindex="-1">Investigation</button>
+              <button class="air-tab" id="tab-proposal" role="tab" data-tab="proposal" aria-controls="panel-proposal" aria-selected="true">Proposed fix</button>
+              <button class="air-tab" id="tab-activity" role="tab" data-tab="activity" aria-controls="panel-activity" aria-selected="false" tabindex="-1">Activity</button>
+            </div>
+            <section class="air-panel-content" id="panel-investigation" role="tabpanel" aria-labelledby="tab-investigation" tabindex="0" hidden>
+              <div class="air-insight"><span aria-hidden="true">✧</span><div><h3 id="investigation-title">Synthetic incident</h3><p>These are fixed synthetic scenarios, not live cluster or cloud monitoring.</p></div></div>
+              <ul class="air-evidence" id="evidence-list"></ul>
+            </section>
+            <section class="air-panel-content" id="panel-proposal" role="tabpanel" aria-labelledby="tab-proposal" tabindex="0">
+              <div class="air-section-head"><h3>Proposed configuration</h3><span class="air-label" id="validation-status">Awaiting evidence</span></div>
+              <p class="air-change-summary" id="proposal-summary">A verified proposal will appear after preparation completes.</p>
+              <div class="air-file"><div class="air-file-head"><span id="artifact-path">No verified artifact yet</span><a id="proposal-download" hidden download>Download YAML</a></div><pre class="air-diff"><code id="artifact">Select an incident to inspect its proposal.</code></pre></div>
+              <div class="air-validation" id="validation-details"></div>
+              <details class="air-provenance" id="provenance" hidden><summary>Artifact provenance</summary><dl><dt>SHA-256</dt><dd id="artifact-hash"></dd><dt>Execution</dt><dd id="execution-id"></dd><dt>Model invocations</dt><dd id="model-calls"></dd></dl></details>
+            </section>
+            <section class="air-panel-content" id="panel-activity" role="tabpanel" aria-labelledby="tab-activity" tabindex="0" hidden><ol class="air-timeline" id="activity-list"></ol></section>
+            <section class="air-decision" aria-label="Proposal decision">
+              <div class="air-decision-top"><div><h3 id="decision-title">Human-reviewed changes only</h3><p class="air-subtle" id="decision-note">Review is required before a real PR can be created.</p></div><div class="air-actions"><button class="air-button" id="refresh-run" disabled>Refresh</button><a class="air-button primary" id="github-review" target="_blank" rel="noopener noreferrer" hidden>Review in GitHub ↗</a></div></div>
+              <p class="air-state-note" id="workspace-message" role="status"></p>
+              <div class="air-pr-card" id="publication" hidden><h3 id="publication-title">Publication receipt</h3><p id="result" role="status"></p><div class="air-actions"><a id="published-pr" target="_blank" rel="noopener noreferrer" hidden>Open remediation PR ↗</a><a id="receipt-download" hidden download>Download receipt</a></div></div>
+              <p id="execution-error" class="error" role="alert"></p>
+            </section>
+          </article>
+        </section>
+        <footer class="air-footer"><span>◇ Proposal only · no automatic merge or deployment</span><span>Live AI + validators on GitHub · no local Docker required</span></footer>
+      </main>
+    </div>
+  </div>
+  <dialog id="simulator" class="air-drawer" aria-labelledby="simulator-heading" aria-describedby="simulator-note">
+    <div class="air-drawer-heading"><h2 id="simulator-heading">Simulate incident</h2><button class="air-button" id="close-simulator" aria-label="Close simulator">×</button></div>
+    <form id="incident-form">
+      <p class="air-subtle" id="simulator-note">Choose one allowlisted synthetic scenario. At most two Gemini calls for that one case; keep billing unset. No production data is sent.</p>
+      <p class="air-subtle" id="simulator-readiness" role="status"></p>
+      <label for="type">Scenario</label><select id="type" disabled><option>Loading scenarios…</option></select>
+      <label for="service">Service</label><input id="service" value="payment-api" disabled>
+      <label for="title">Title</label><input id="title" value="Payment API memory limit exceeded" disabled>
+      <label for="description">Incident details</label><textarea id="description" disabled>Fixed synthetic OOM incident. Propose memory request 256Mi and limit 512Mi in namespace demo. Validate with kubeconform, then wait for human review.</textarea>
+      <label class="air-consent" for="live-consent"><input type="checkbox" id="live-consent" required> I authorize this one synthetic run, with at most two Gemini calls.</label>
+      <div class="air-drawer-actions"><button class="air-button" id="cancel-simulator" type="button">Cancel</button><button class="air-button primary" id="submit-incident" type="submit" disabled>Start confirmed live run</button></div>
+      <p id="simulator-error" class="error" role="alert"></p>
+      <p class="air-subtle">A real PR requires separate approval in GitHub. Provider quota and billing are not checked here.</p>
+    </form>
+  </dialog>
+  <dialog id="policy" class="air-policy" aria-labelledby="policy-heading"><div class="air-drawer-heading"><h2 id="policy-heading">Approval policy</h2><button class="air-button" id="close-policy" aria-label="Close approval policy">×</button></div><p>The required reviewer approves or rejects publication in GitHub’s remediation-demo-review environment. “Approve and deploy” authorizes PR creation only, not deployment.</p><p>This dashboard cannot approve, bypass review, merge, or deploy. Workflow cancellation is available only for active runs started here and cannot undo an existing PR. Pause and resume are not supported.</p><p>A successful workflow without a verified receipt is not proof of publication. Missing evidence is never treated as a validation pass.</p></dialog>
+</body>
+</html>
