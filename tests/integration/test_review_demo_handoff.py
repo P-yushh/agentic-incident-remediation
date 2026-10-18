@@ -19,7 +19,10 @@ pytestmark = [
 ]
 
 
-def test_original_review_survives_rdb_handoff_and_separate_publication_process(tmp_path):
+@pytest.mark.parametrize(
+    "scenario", ["kubernetes_oom_killed", "kubernetes_crash_loop", "terraform_drift"]
+)
+def test_original_review_survives_rdb_handoff_and_separate_publication_process(tmp_path, scenario):
     assert os.environ["AIR_INTEGRATION_REDIS_URL"] == "redis://127.0.0.1:6379/0"
     script = Path(__file__).parents[2] / "scripts/reviewed_live_demo.py"
     spec = importlib.util.spec_from_file_location("review_demo_handoff", script)
@@ -29,7 +32,7 @@ def test_original_review_survives_rdb_handoff_and_separate_publication_process(t
     worker = Path(__file__).with_name("review_demo_worker.py")
     manifest = tmp_path / "manifest.json"
     prepared = subprocess.run(
-        [sys.executable, str(worker), "prepare", str(manifest)],
+        [sys.executable, str(worker), "prepare", str(manifest), "--scenario", scenario],
         capture_output=True,
         text=True,
         timeout=90,

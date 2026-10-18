@@ -15,20 +15,13 @@ from agentic_incident_remediation.models import (
     WorkflowStatus,
 )
 from agentic_incident_remediation.operations.publisher import OperationsError
+from agentic_incident_remediation.review_scenarios import (
+    SCENARIOS,
+    DemoScenario,
+    scenario_for_manifest,
+)
 
-DEMO_INCIDENT = {
-    "type": "kubernetes_oom_killed",
-    "title": "Synthetic payment-api OOM event",
-    "description": (
-        "Synthetic demonstration. Prepare a concise generate/validate/review plan. "
-        "Propose a complete apps/v1 Deployment named payment-api in namespace demo, "
-        "replicas 1, selector and Pod label app=payment-api, container name api, "
-        "image example/payment-api:1.0. Increase memory request from 128Mi to 256Mi "
-        "and limit from 256Mi to 512Mi. Do not apply anything."
-    ),
-    "source": "reviewed-live-demo",
-    "context": {"k8s_kind": "Deployment", "k8s_api_version": "apps/v1"},
-}
+DEMO_INCIDENT = SCENARIOS[DemoScenario.OOM].incident()
 
 
 class PublicationDisabled:
@@ -60,19 +53,23 @@ def require_pending_review(workflow: DurableApprovalWorkflow, state: AgentState)
 
 
 def prepare_review(
-    workflow: DurableApprovalWorkflow, budget: BudgetedModel, provenance: dict[str, str]
+    workflow: DurableApprovalWorkflow,
+    budget: BudgetedModel,
+    provenance: dict[str, str],
+    scenario: DemoScenario = DemoScenario.OOM,
 ) -> dict[str, Any]:
     """Start from a fresh alert and save review evidence without deciding for the user."""
 
     with TestClient(create_app(RemediationService(workflow))) as client:
-        response = client.post("/api/incidents", json=DEMO_INCIDENT)
+        response = client.post("/api/incidents", json=SCENARIOS[scenario].incident())
         response.raise_for_status()
         state = AgentState.model_validate(response.json())
         require_pending_review(workflow, state)
     if budget.calls != 2:
         raise ValueError("the demo requires exactly one plan and one artifact invocation")
     return {
-        "version": 1,
+        "version": 2,
+        "scenario": scenario.value,
         "synthetic": True,
         "provenance": provenance,
         "model_calls": budget.calls,
@@ -86,8 +83,9 @@ def publish_review(
 ) -> dict[str, Any]:
     """Resume the same persisted interrupt; never seed or reconstruct a new graph state."""
 
-    if manifest.get("version") != 1 or manifest.get("synthetic") is not True:
+    if manifest.get("synthetic") is not True:
         raise ValueError("unsupported review manifest")
+    scenario_for_manifest(manifest)
     expected = AgentState.model_validate(manifest["state"])
     restored = workflow.get_state(expected.execution_id).model_copy(
         update={"review_ready": workflow.ready_for_review(expected.execution_id)}

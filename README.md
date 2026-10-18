@@ -84,12 +84,30 @@ The console explicitly labels offline/live model, validation, publication and pe
 
 For a complete repeatable run, including a Docker-free laptop option, see the
 [demonstration runbook](docs/demo-workflow.md). The manually dispatched `reviewed-live-demo`
-workflow connects a fresh synthetic Kubernetes incident to live Gemini generation, real Docker
+workflow connects a selected synthetic Kubernetes or Terraform incident to live Gemini generation, real Docker
 validation, a required human review, restoration of the original Redis checkpoints, and a real
 open GitHub PR. It has a hard two-invocation budget and no merge or deployment capability.
 It requires a configured required-reviewer environment before use; it is never run by normal CI.
 
 See [the architecture guide](docs/architecture.md) for component and trust boundaries.
+
+### Actions-backed dashboard (no local Docker)
+
+```bash
+agentic-remediation-actions
+```
+
+Open <http://127.0.0.1:8001>. This separate, loopback-only console uses the same Sand & Teal
+layout and your existing server-side GitHub credential to start the reviewed live workflow,
+poll progress, verify/download the proposal and show the approved real PR receipt. Each start
+requires explicit two-call consent; final approval stays in GitHub. Local run history survives
+refresh/restart. Pause/resume are not supported by Actions; cancellation does not undo a PR.
+The simulator offers OOM, CrashLoop/configuration-reference, and Terraform ingress-drift scenarios.
+Generation/validation and publication remain bound to the selected case; this is not live monitoring.
+
+Use **Load existing run** with `39124344483` for read-only inspection without consuming model
+quota. See the [Actions dashboard guide](docs/actions-dashboard.md) for credential handling,
+duplicate-request safeguards, artifact expiry, local security and verification limits.
 
 ### Dashboard and execution controls
 
@@ -164,9 +182,12 @@ ordered generate/validate/review steps. Subsequent
 [combined live verification](https://github.com/P-yushh/agentic-incident-remediation/actions/runs/39118745681)
 passed Kubernetes and Terraform planning/generation, real validation, pending native review and
 fresh-process Redis state/history recovery. [PR #9](https://github.com/P-yushh/agentic-incident-remediation/pull/9)
-separately verified publication of saved live-validated synthetic output. These are staged checks,
-not evidence that the new reviewed Actions workflow has completed a continuous live run; consult
-the [verification ledger](docs/demo-workflow.md#verification-ledger) for exact scope.
+separately verified publication of saved live-validated synthetic output. A subsequent
+[reviewed OOM workflow run](https://github.com/P-yushh/agentic-incident-remediation/actions/runs/39124344483)
+completed fresh live generation, real validation, human review and publication of
+[PR #11](https://github.com/P-yushh/agentic-incident-remediation/pull/11). That evidence predates
+the new multi-scenario dashboard: no fresh dashboard-driven hosted run of all three scenarios
+is claimed. Consult the [verification ledger](docs/demo-workflow.md#verification-ledger) for scope.
 The full local live application still requires Redis, Docker validation, and a GitHub token.
 The credential-free demo never reads or uses hosted-model keys, even when `.env` selects Gemini.
 

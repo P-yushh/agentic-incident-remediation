@@ -172,6 +172,22 @@ def _artifact_fixture(user_prompt: str) -> dict[str, object]:
             ),
             "change_summary": "Restrict service ingress to the private application network.",
         }
+    if "queue-worker" in user_prompt or "kubernetes_crash_loop" in user_prompt:
+        return {
+            "kind": "kubernetes_manifest",
+            "path": "remediations/queue-worker-deployment.yaml",
+            "content": (
+                "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n"
+                "  name: queue-worker\n  namespace: demo\nspec:\n  replicas: 1\n"
+                "  selector:\n    matchLabels:\n      app: queue-worker\n"
+                "  template:\n    metadata:\n      labels:\n        app: queue-worker\n"
+                "    spec:\n      containers:\n        - name: worker\n"
+                "          image: example/queue-worker:1.0\n"
+                "          envFrom:\n            - configMapRef:\n"
+                "                name: worker-config\n"
+            ),
+            "change_summary": "Correct the synthetic ConfigMap reference to worker-config.",
+        }
     return {
         "kind": "kubernetes_manifest",
         "path": "remediations/payment-api-memory.yaml",

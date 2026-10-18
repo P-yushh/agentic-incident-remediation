@@ -8,6 +8,15 @@ on:
         required: true
         default: false
         type: boolean
+      scenario:
+        description: 'Allowlisted synthetic incident; at most 2 Gemini calls for the selected case'
+        required: true
+        default: kubernetes_oom_killed
+        type: choice
+        options:
+          - kubernetes_oom_killed
+          - kubernetes_crash_loop
+          - terraform_drift
 
 permissions:
   contents: read
@@ -18,6 +27,7 @@ concurrency:
 
 env:
   AIR_CONFIRM_LIVE_DEMO: ${{ inputs.confirm_live_demo }}
+  AIR_DEMO_SCENARIO: ${{ inputs.scenario }}
   HF_TOKEN: ''
   GEMINI_API_KEY: ''
   GITHUB_TOKEN: ''
@@ -66,10 +76,17 @@ jobs:
           python scripts/reviewed_live_demo.py preflight
           --bundle "${RUNNER_TEMP}/review-bundle"
       - name: Build real Kubernetes validator without model credentials
+        if: inputs.scenario != 'terraform_drift'
         run: >-
           docker build --pull
           --tag agentic-remediation/kubeconform-validator:0.1.0
           sandbox/kubeconform-validator
+      - name: Build real Terraform validator without model credentials
+        if: inputs.scenario == 'terraform_drift'
+        run: >-
+          docker build --pull
+          --tag agentic-remediation/terraform-validator:0.1.0
+          sandbox/terraform-validator
       - name: Fresh alert through live inference, Docker validation and pending Redis review
         id: prepare
         env:
