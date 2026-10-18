@@ -19,6 +19,7 @@ from agentic_incident_remediation.api.contracts import (
     ExecutionControlSubmission,
     HealthResponse,
     IncidentSubmission,
+    RuntimeInfo,
 )
 from agentic_incident_remediation.api.service import RemediationService
 from agentic_incident_remediation.config import get_settings
@@ -46,7 +47,10 @@ _DASHBOARD = Path(__file__).with_name("dashboard.html")
 
 
 def create_app(
-    service: RemediationService, *, close_clients: Callable[[], None] | None = None
+    service: RemediationService,
+    *,
+    close_clients: Callable[[], None] | None = None,
+    runtime: RuntimeInfo | None = None,
 ) -> FastAPI:
     """Create an API bound to an injected workflow service."""
 
@@ -98,6 +102,10 @@ def create_app(
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
         return HealthResponse()
+
+    @app.get("/api/runtime", response_model=RuntimeInfo)
+    def runtime_info() -> RuntimeInfo:
+        return runtime or RuntimeInfo()
 
     @app.get("/metrics", include_in_schema=False)
     def metrics() -> Response:
@@ -168,7 +176,17 @@ def create_live_app() -> FastAPI:
         model.close()
         publisher.close()
 
-    return create_app(RemediationService(workflow), close_clients=close_clients)
+    return create_app(
+        RemediationService(workflow),
+        close_clients=close_clients,
+        runtime=RuntimeInfo(
+            mode="live",
+            model=settings.model_provider.value,
+            validators="Docker",
+            publication="real GitHub PR after approval",
+            persistence="Redis",
+        ),
+    )
 
 
 async def _state_events(

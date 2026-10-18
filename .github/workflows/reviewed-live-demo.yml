@@ -1,0 +1,140 @@
+name: reviewed-live-demo
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_live_demo:
+        description: 'Allow at most 2 Gemini calls; a real PR requires a separate human review'
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reviewed-live-demo
+  cancel-in-progress: false
+
+env:
+  AIR_CONFIRM_LIVE_DEMO: ${{ inputs.confirm_live_demo }}
+  HF_TOKEN: ''
+  GEMINI_API_KEY: ''
+  GITHUB_TOKEN: ''
+  GH_TOKEN: ''
+  PIP_NO_CACHE_DIR: '1'
+
+jobs:
+  prepare:
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      inputs.confirm_live_demo &&
+      github.ref == 'refs/heads/main' &&
+      github.run_attempt == 1 &&
+      github.event.repository.private == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      deployments: read
+    outputs:
+      bundle_sha256: ${{ steps.prepare.outputs.bundle_sha256 }}
+    services:
+      redis:
+        image: redis:8.2-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install project
+        run: python -m pip install -e '.[dev]'
+      - name: Verify required reviewers before spending model quota
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python scripts/reviewed_live_demo.py preflight
+          --bundle "${RUNNER_TEMP}/review-bundle"
+      - name: Build real Kubernetes validator without model credentials
+        run: >-
+          docker build --pull
+          --tag agentic-remediation/kubeconform-validator:0.1.0
+          sandbox/kubeconform-validator
+      - name: Fresh alert through live inference, Docker validation and pending Redis review
+        id: prepare
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          AIR_REDIS_CONTAINER: ${{ job.services.redis.id }}
+        run: >-
+          python scripts/reviewed_live_demo.py prepare
+          --bundle "${RUNNER_TEMP}/review-bundle"
+      - name: Save synthetic proposal, review evidence and original Redis checkpoints
+        uses: actions/upload-artifact@v4
+        with:
+          name: review-bundle-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/review-bundle/
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: prepare
+    # Configure required reviewers before dispatch; preflight rejects an unprotected environment.
+    environment: remediation-demo-review
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: read
+      deployments: read
+    services:
+      redis:
+        image: redis:8.2-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+    env:
+      AIR_BUNDLE_SHA256: ${{ needs.prepare.outputs.bundle_sha256 }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install project without provider credentials
+        run: python -m pip install -e '.[dev]'
+      - name: Download only this run's reviewed checkpoints
+        uses: actions/download-artifact@v4
+        with:
+          name: review-bundle-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/review-bundle/
+      - name: Verify human review, restore exact execution and publish approved artifact
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          AIR_REDIS_CONTAINER: ${{ job.services.redis.id }}
+        run: >-
+          python scripts/reviewed_live_demo.py publish
+          --bundle "${RUNNER_TEMP}/review-bundle"
+      - name: Save synthetic publication receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: publication-receipt-${{ github.run_id }}
+          path: ${{ runner.temp }}/review-bundle/publication.json
+          if-no-files-found: error
+          retention-days: 1
+      # No merge, infrastructure apply, additional model calls or automatic reruns.
