@@ -86,6 +86,8 @@ def main() -> None:
             assert response.status_code == 200, response.text
             recovered = response.json()
             if args.mode == "recover":
+                history_size = len(workflow.get_history(args.execution_id))
+                assert history_size > 1, "Typed checkpoint history must survive a fresh process"
                 stale = client.post(
                     base + "/approval",
                     json={
@@ -104,7 +106,11 @@ def main() -> None:
                     },
                 )
                 assert rejected.status_code == 200, rejected.text
-                result = {"recovered": recovered, "rejected": rejected.json()}
+                result = {
+                    "recovered": recovered,
+                    "rejected": rejected.json(),
+                    "history_size": history_size,
+                }
             else:
                 assert recovered["control_status"] == "paused"
                 resumed = client.post(base + "/control", json={"action": "resume"})

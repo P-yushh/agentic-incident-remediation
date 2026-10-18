@@ -6,7 +6,10 @@ from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
+from langgraph.checkpoint.base import CheckpointTuple, empty_checkpoint
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.checkpoint.redis import RedisSaver as BaseRedisSaver
+from pydantic import ValidationError
 
 from agentic_incident_remediation.demo import FixtureStructuredModel
 from agentic_incident_remediation.graph import (
@@ -15,6 +18,7 @@ from agentic_incident_remediation.graph import (
 )
 from agentic_incident_remediation.llm import FakeStructuredModel
 from agentic_incident_remediation.models import (
+    AgentState,
     ApprovalResponse,
     Incident,
     IncidentType,
@@ -23,7 +27,10 @@ from agentic_incident_remediation.models import (
 from agentic_incident_remediation.models.base import StrictModel
 from agentic_incident_remediation.operations import FakePullRequestPublisher
 from agentic_incident_remediation.persistence import checkpoint_config, create_redis_checkpointer
-from agentic_incident_remediation.persistence.checkpoints import create_checkpoint_serializer
+from agentic_incident_remediation.persistence.checkpoints import (
+    RedisSaver,
+    create_checkpoint_serializer,
+)
 from agentic_incident_remediation.sandbox import (
     FakeSandboxRunner,
     SandboxExecution,
@@ -180,6 +187,52 @@ def test_redis_checkpointer_is_initialized_before_use(monkeypatch: pytest.Monkey
     assert events == [("created", "redis://localhost:6379/0"), "setup"]
     with pytest.raises(ValueError, match="cannot be empty"):
         create_redis_checkpointer("  ")
+
+
+def test_raw_inline_history_values_require_typed_hydration() -> None:
+    saver = object.__new__(RedisSaver)
+    saver.serde = create_checkpoint_serializer()
+    state = AgentState(incident=make_incident())
+    checkpoint = empty_checkpoint()
+    checkpoint["channel_values"] = {name: getattr(state, name) for name in type(state).model_fields}
+    stored = saver._dump_checkpoint(checkpoint)
+
+    with pytest.raises(ValidationError):
+        AgentState.model_validate(stored["channel_values"])
+
+    restored = saver._deserialize_channel_values(stored["channel_values"])
+    assert AgentState.model_validate(restored) == state
+    assert saver.serde.pickle_fallback is False
+
+
+def test_history_uses_typed_single_checkpoint_reads(monkeypatch) -> None:
+    saver = object.__new__(RedisSaver)
+    config = checkpoint_config(uuid4(), recursion_limit=18)
+    before = checkpoint_config(uuid4(), recursion_limit=18)
+    checkpoint = empty_checkpoint()
+    entry = CheckpointTuple(config, checkpoint, {"source": "loop", "step": 1, "parents": {}})
+    hydrated = entry._replace(checkpoint={**checkpoint, "channel_values": {"typed": True}})
+    listed = patch.object(BaseRedisSaver, "list", return_value=iter([entry]))
+    read = patch.object(BaseRedisSaver, "get_tuple", return_value=hydrated)
+
+    with listed as list_mock, read as read_mock:
+        assert list(saver.list(config, filter={"source": "loop"}, before=before, limit=1)) == [
+            hydrated
+        ]
+        list_mock.assert_called_once_with(config, filter={"source": "loop"}, before=before, limit=1)
+        read_mock.assert_called_once_with(config)
+
+
+def test_missing_listed_checkpoint_fails_closed() -> None:
+    saver = object.__new__(RedisSaver)
+    config = checkpoint_config(uuid4(), recursion_limit=18)
+    entry = CheckpointTuple(config, empty_checkpoint(), {})
+    with (
+        patch.object(BaseRedisSaver, "list", return_value=iter([entry])),
+        patch.object(BaseRedisSaver, "get_tuple", return_value=None),
+        pytest.raises(LookupError, match="could not be restored"),
+    ):
+        list(saver.list(config))
 
 
 def test_redis_json_serialization_restores_typed_state_and_native_approval() -> None:
