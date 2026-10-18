@@ -72,3 +72,34 @@ integration stages. Provider adapter and live-app wiring tests use mocked HTTP a
 they do not establish live inference availability or response quality. See the
 [provider configuration](../README.md#selecting-gemini) for no-billing setup and boundaries.
 The deterministic offline dashboard remains usable independently of all these services.
+
+## Explicit combined live verification
+
+`combined-live-workflow` is a separate, manually dispatched workflow. Normal CI and the
+container-integration job still never call hosted models. To run it, an owner must store a Gemini
+key as the repository Actions secret `GEMINI_API_KEY`, select `main`, and explicitly confirm the
+live-call input. Use a provider project with billing unset and verify its current free allowance.
+This workflow cannot configure provider billing, but the application is not a billing control.
+
+The public-repository-only job uses an ephemeral standard Ubuntu runner and a disposable Redis
+service. It builds both real validator images without model credentials, then sends two synthetic
+incidents through the actual Gemini planner and generator, production Docker sandbox runner,
+Redis checkpointer, API, and native human-review interrupt. Only that inference step receives the
+Gemini secret. There is no real repository publisher or GitHub write token.
+
+Each scenario has a hard two-call budget, shared between planning and artifact generation;
+the entire run has at most four Gemini invocations. A correction attempt beyond that budget fails
+closed before calling the provider. No HTTP retries, provider fallback, automatic workflow reruns,
+artifact uploads, or image publication are configured. A failed job does not authorize another
+live run: inspect its report before deliberately spending more provider quota.
+
+A second Python process, without the Gemini key, restores both executions and checks the complete
+checkpoint, validation records, pending approval, native interrupt, and history. It submits no
+approval or rejection. A successful report therefore proves the combined pipeline up to human
+review and process-restart recovery, not deployment, incident resolution, Redis-server restart
+durability, or real remediation PR publication. All inputs and generated output are synthetic;
+resource IDs and workload images are placeholders. Results stay in the job log, while report files
+disappear with the runner. The API key must never appear in source, logs, or generated reports.
+
+The harness is `scripts/combined_live_workflow.py`; its offline unit tests use in-memory
+persistence, fixture models, and fixture validators and do not spend hosted-model quota.
