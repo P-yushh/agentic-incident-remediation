@@ -26,11 +26,12 @@ python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -e '.[dev]'
-docker compose up -d redis
 pytest
 ```
 
 Automated tests use deterministic model doubles and do not consume hosted-model credits.
+Redis and Docker are not needed for this setup. Start them only for an explicitly selected
+live runtime on a machine where containers are permitted.
 
 ## Current foundation
 
@@ -72,12 +73,21 @@ Run the complete system locally without Gemini, Hugging Face, Redis, Docker, Git
 billing risk:
 
 ```bash
+agentic-remediation-check --mode offline
 agentic-remediation-demo
 ```
 
 Then open <http://127.0.0.1:8000>. This mode uses deterministic adapters but exercises the real
 FastAPI routes, LangGraph state machine, validation routing, approval interrupt, and pull-request
 capability boundary. The returned pull-request URL is simulated and no network call is made.
+The console explicitly labels offline/live model, validation, publication and persistence modes.
+
+For a complete repeatable run, including a Docker-free laptop option, see the
+[demonstration runbook](docs/demo-workflow.md). The manually dispatched `reviewed-live-demo`
+workflow connects a fresh synthetic Kubernetes incident to live Gemini generation, real Docker
+validation, a required human review, restoration of the original Redis checkpoints, and a real
+open GitHub PR. It has a hard two-invocation budget and no merge or deployment capability.
+It requires a configured required-reviewer environment before use; it is never run by normal CI.
 
 See [the architecture guide](docs/architecture.md) for component and trust boundaries.
 
@@ -150,9 +160,14 @@ workflow; it does not buy credits. Use synthetic incident data only, and review 
 Automated provider wiring and error-handling tests use mocked HTTP, not a hosted service.
 A manual smoke test on October 18, 2026 verified one real `gemini-3.8-flash` request: HTTP 200,
 302 total tokens, and a locally validated `RemediationPlan` with the matching incident ID and
-ordered generate/validate/review steps. This verifies structured planning, not artifact generation
-or the complete live workflow. Live smoke tests remain separate, deliberate steps; the full live
-application also still requires Redis, Docker validation, and a GitHub token.
+ordered generate/validate/review steps. Subsequent
+[combined live verification](https://github.com/P-yushh/agentic-incident-remediation/actions/runs/39118745681)
+passed Kubernetes and Terraform planning/generation, real validation, pending native review and
+fresh-process Redis state/history recovery. [PR #9](https://github.com/P-yushh/agentic-incident-remediation/pull/9)
+separately verified publication of saved live-validated synthetic output. These are staged checks,
+not evidence that the new reviewed Actions workflow has completed a continuous live run; consult
+the [verification ledger](docs/demo-workflow.md#verification-ledger) for exact scope.
+The full local live application still requires Redis, Docker validation, and a GitHub token.
 The credential-free demo never reads or uses hosted-model keys, even when `.env` selects Gemini.
 
 Hugging Face remains available with `AIR_MODEL_PROVIDER=huggingface`,
@@ -166,7 +181,9 @@ The `container-integration` GitHub Actions workflow builds both validator images
 against a real Redis service on a standard Ubuntu runner. It checks valid and invalid artifacts,
 approval recovery across separate Python processes, and checkpointed pause/resume/termination.
 Hosted model calls and GitHub publication are deliberately excluded; these checks need no secrets.
-The normal local suite skips the seven opt-in integration checks, so local Docker is not required.
+The opt-in suite also tests a saved Redis RDB handoff and original native approval in a separate
+process, using a fixture model and simulated publication. The normal local suite skips container
+checks, so local Docker is not required.
 
 See [container integration testing](docs/integration.md) for scope, execution, and cost safeguards.
 
@@ -181,6 +198,7 @@ See [container integration testing](docs/integration.md) for scope, execution, a
 | `POST` | `/api/executions/{id}/control` | Request `pause`, `resume`, or `terminate` using the `action` field |
 | `POST` | `/api/executions/{id}/approval` | Resume with a correlated approve/reject decision |
 | `GET` | `/health` | Report process liveness without exposing configuration |
+| `GET` | `/api/runtime` | Report configured offline/live capability labels, not dependency health |
 | `GET` | `/metrics` | Export low-cardinality Prometheus counters |
 
 ## Planning workflow
