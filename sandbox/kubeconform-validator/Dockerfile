@@ -1,7 +1,9 @@
 FROM alpine:3.22 AS schemas
 
 ARG KUBERNETES_VERSION=1.31.0
-RUN apk add --no-cache curl=8.14.1-r3 \
+# Alpine release repositories replace package revisions when publishing security fixes.
+# Use this fixed release's current curl instead of requiring a removed APK revision.
+RUN apk add --no-cache curl \
     && mkdir -p /schemas \
     && curl --fail --silent --show-error --location \
       "https://raw.githubusercontent.com/yannh/kubernetes-json-schema/master/v${KUBERNETES_VERSION}-standalone-strict/deployment-apps-v1.json" \
