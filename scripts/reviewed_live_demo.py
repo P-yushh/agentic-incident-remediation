@@ -25,6 +25,11 @@ from agentic_incident_remediation.review_demo import (
     prepare_review,
     publish_review,
 )
+from agentic_incident_remediation.review_scenarios import (
+    SCENARIOS,
+    DemoScenario,
+    scenario_for_manifest,
+)
 from agentic_incident_remediation.sandbox import DockerSandboxRunner, FakeSandboxRunner
 from agentic_incident_remediation.schema_tools import LocalSchemaToolProvider
 
@@ -55,7 +60,14 @@ def context() -> dict[str, str]:
         != f"{repository}/.github/workflows/reviewed-live-demo.yml@refs/heads/main"
     ):
         raise ValueError("requires an explicitly confirmed first-attempt public main workflow run")
-    return {"repository": repository, "sha": sha, "run_id": run_id, "run_attempt": "1"}
+    scenario = DemoScenario(os.environ.get("AIR_DEMO_SCENARIO", DemoScenario.OOM.value))
+    return {
+        "repository": repository,
+        "sha": sha,
+        "run_id": run_id,
+        "run_attempt": "1",
+        "scenario": scenario.value,
+    }
 
 
 def github_get(path: str) -> Any:
@@ -201,7 +213,9 @@ def prepare(directory: Path, provenance: dict[str, str]) -> None:
             checkpointer=create_redis_checkpointer(REDIS_URL),
             max_retries=1,
         )
-        manifest = prepare_review(workflow, budget, provenance)
+        manifest = prepare_review(
+            workflow, budget, provenance, DemoScenario(provenance.get("scenario", DemoScenario.OOM))
+        )
     safe_write(directory / "manifest.json", manifest)
     (directory / "proposal.yaml").write_text(
         manifest["state"]["artifacts"][0]["content"], encoding="utf-8"
@@ -220,7 +234,10 @@ def prepare(directory: Path, provenance: dict[str, str]) -> None:
         f"Approval: `{state['approval']['id']}`\n\n"
         f"Artifact SHA-256: `{manifest['artifact_sha256']}`\n\n"
         f"Bundle SHA-256: `{digest}`\n\n"
-        "Model invocations: 2 / 2. Real kubeconform: passed. Nothing deployed."
+        f"Scenario: `{manifest['scenario']}`. "
+        "Model invocations: 2 / 2. Real "
+        f"{SCENARIOS[DemoScenario(manifest['scenario'])].validator}: "
+        "passed. Nothing deployed."
     )
 
 
@@ -228,6 +245,10 @@ def publish(directory: Path, provenance: dict[str, str]) -> None:
     if os.environ.get("GEMINI_API_KEY") or os.environ.get("HF_TOKEN"):
         raise ValueError("publication must run without model credentials")
     manifest = verify_bundle(directory, provenance, os.environ.get("AIR_BUNDLE_SHA256", ""))
+    if scenario_for_manifest(manifest) != DemoScenario(
+        provenance.get("scenario", DemoScenario.OOM)
+    ):
+        raise ValueError("review bundle does not match this run's scenario")
     reviewer = approved_reviewer(provenance)
     restore_redis(directory)
     with GitHubPullRequestPublisher(token=os.environ.get("GITHUB_TOKEN", "")) as publisher:

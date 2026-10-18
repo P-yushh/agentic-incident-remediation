@@ -16,6 +16,7 @@ from agentic_incident_remediation.review_demo import (
     prepare_review,
     publish_review,
 )
+from agentic_incident_remediation.review_scenarios import DemoScenario
 from agentic_incident_remediation.sandbox import DockerSandboxRunner, FakeSandboxRunner
 
 
@@ -23,6 +24,9 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("mode", choices=("prepare", "publish"))
     parser.add_argument("manifest", type=Path)
+    parser.add_argument(
+        "--scenario", choices=[s.value for s in DemoScenario], default=DemoScenario.OOM.value
+    )
     args = parser.parse_args()
     assert os.environ.get("AIR_RUN_CONTAINER_TESTS") == "1"
     assert not any(os.environ.get(key) for key in ("GITHUB_TOKEN", "GEMINI_API_KEY", "HF_TOKEN"))
@@ -38,7 +42,9 @@ def main() -> None:
         max_retries=1,
     )
     if preparing:
-        manifest = prepare_review(workflow, budget, {"kind": "offline-container-integration"})
+        manifest = prepare_review(
+            workflow, budget, {"kind": "offline-container-integration"}, DemoScenario(args.scenario)
+        )
         args.manifest.write_text(json.dumps(manifest), encoding="utf-8")
         assert not publisher.proposals
     else:

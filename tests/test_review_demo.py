@@ -21,6 +21,7 @@ from agentic_incident_remediation.review_demo import (
     publish_review,
     require_pending_review,
 )
+from agentic_incident_remediation.review_scenarios import DemoScenario
 from agentic_incident_remediation.sandbox import FakeSandboxRunner, SandboxExecution, ValidationTool
 
 
@@ -30,18 +31,19 @@ def workflow(model, runner, publisher, saver):
     )
 
 
-def pending_review():
+def pending_review(scenario=DemoScenario.OOM):
     saver = InMemorySaver(serde=create_checkpoint_serializer())
     model = FixtureStructuredModel()
     budget = BudgetedModel(model)
     runner = FixtureSandboxRunner()
     first = workflow(budget, runner, PublicationDisabled(), saver)
-    manifest = prepare_review(first, budget, {"repository": "example/synthetic"})
+    manifest = prepare_review(first, budget, {"repository": "example/synthetic"}, scenario)
     return saver, manifest, model, runner
 
 
-def test_fresh_incident_restores_exact_interrupt_then_publishes_once() -> None:
-    saver, manifest, model, runner = pending_review()
+@pytest.mark.parametrize("scenario", list(DemoScenario))
+def test_fresh_incident_restores_exact_interrupt_then_publishes_once(scenario) -> None:
+    saver, manifest, model, runner = pending_review(scenario)
     publisher = FakePullRequestPublisher()
     no_calls = FakeStructuredModel([])
     no_validation = FakeSandboxRunner([])
@@ -53,6 +55,7 @@ def test_fresh_incident_restores_exact_interrupt_then_publishes_once() -> None:
     result = publish_review(restored, manifest, reviewer="human-reviewer")
 
     assert result["status"] == "completed"
+    assert manifest["scenario"] == scenario.value
     assert result["execution_id"] == manifest["state"]["execution_id"]
     assert result["approval_id"] == manifest["state"]["approval"]["id"]
     assert result["artifact_sha256"] == manifest["artifact_sha256"]
@@ -91,7 +94,7 @@ def test_changed_review_is_rejected_before_publication(change) -> None:
     elif change == "checksum":
         manifest["artifact_sha256"] = "0" * 64
     elif change == "version":
-        manifest["version"] = 2
+        manifest["version"] = 999
     else:
         manifest["synthetic"] = False
     publisher = FakePullRequestPublisher()

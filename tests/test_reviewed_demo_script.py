@@ -17,6 +17,7 @@ from agentic_incident_remediation.llm import GeminiStructuredModel
 from agentic_incident_remediation.models import ArtifactDraft, RemediationPlan
 from agentic_incident_remediation.operations import GitHubPullRequestPublisher
 from agentic_incident_remediation.persistence.checkpoints import create_checkpoint_serializer
+from agentic_incident_remediation.review_scenarios import DemoScenario
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "reviewed_live_demo.py"
 SPEC = importlib.util.spec_from_file_location("reviewed_live_demo", SCRIPT)
@@ -243,7 +244,8 @@ def test_manual_workflow_scopes_credentials_artifacts_and_human_gate():
     assert text.count("persist-credentials: false") == 2
 
 
-def test_both_script_phases_use_actual_adapters_with_mocked_http(monkeypatch, tmp_path):
+@pytest.mark.parametrize("scenario", list(DemoScenario))
+def test_both_script_phases_use_actual_adapters_with_mocked_http(monkeypatch, tmp_path, scenario):
     """Exercise script glue too: only external transport, Redis and Docker are replaced."""
 
     for key in ("GITHUB_TOKEN", "GH_TOKEN", "HF_TOKEN"):
@@ -312,7 +314,12 @@ def test_both_script_phases_use_actual_adapters_with_mocked_http(monkeypatch, tm
     restore = Mock()
     monkeypatch.setattr(demo, "restore_redis", restore)
     monkeypatch.setattr(demo, "approved_reviewer", lambda _: "human-reviewer")
-    provenance = {"repository": "example/demo", "sha": "a" * 40, "run_id": "12345"}
+    provenance = {
+        "repository": "example/demo",
+        "sha": "a" * 40,
+        "run_id": "12345",
+        "scenario": scenario.value,
+    }
     bundle = tmp_path / "bundle"
     with (
         httpx.Client(
@@ -341,6 +348,7 @@ def test_both_script_phases_use_actual_adapters_with_mocked_http(monkeypatch, tm
         demo.publish(bundle, provenance)
     receipt = json.loads((bundle / "publication.json").read_text())
     assert receipt["execution_id"] == manifest["state"]["execution_id"]
+    assert manifest["scenario"] == scenario.value
     assert receipt["reviewer"] == "human-reviewer"
     assert receipt["pull_request"]["number"] == 123
     assert len(model_requests) == 2
