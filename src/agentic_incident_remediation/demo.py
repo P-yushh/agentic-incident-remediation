@@ -11,6 +11,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import BaseModel
 
 from agentic_incident_remediation.api.app import create_app
+from agentic_incident_remediation.api.contracts import RuntimeInfo
 from agentic_incident_remediation.api.service import RemediationService
 from agentic_incident_remediation.graph import DurableApprovalWorkflow
 from agentic_incident_remediation.llm import ModelGatewayError, ModelRequest
@@ -97,7 +98,16 @@ def create_demo_service() -> RemediationService:
 def create_demo_app() -> FastAPI:
     """Return the credential-free FastAPI demonstration application."""
 
-    return create_app(create_demo_service())
+    return create_app(
+        create_demo_service(),
+        runtime=RuntimeInfo(
+            mode="offline",
+            model="deterministic fixtures (no inference)",
+            validators="simulated",
+            publication="simulated PR (no repository writes)",
+            persistence="in-memory (lost on restart)",
+        ),
+    )
 
 
 def main() -> None:

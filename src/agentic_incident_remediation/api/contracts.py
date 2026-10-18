@@ -43,6 +43,16 @@ class HealthResponse(StrictModel):
     service: str = "agentic-incident-remediation"
 
 
+class RuntimeInfo(StrictModel):
+    """Non-secret capability labels; not a claim that dependencies are healthy."""
+
+    mode: Literal["offline", "live", "custom"] = "custom"
+    model: str = "injected"
+    validators: str = "injected"
+    publication: str = "injected"
+    persistence: str = "injected"
+
+
 class ExecutionControlSubmission(StrictModel):
     """One cooperative execution-control request."""
 

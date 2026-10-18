@@ -62,13 +62,16 @@ Explicitly enabling them without the real dependencies fails rather than silentl
 ## Boundaries
 
 These checks prove container validation and cross-process checkpoint recovery, not hosted-model
-quality, Kubernetes runtime recovery, Redis service-restart durability, or real GitHub publication.
+quality, Kubernetes runtime recovery or real GitHub publication. When the disposable Redis service
+container ID is provided, an additional RDB snapshot/restart handoff test checks restoration of the
+original review interrupt and approval in a fresh process, with a fixture model and fake publisher.
+It is not a general production Redis durability or backup/restore guarantee.
 Validators run with the production runner's network disabled, read-only root filesystem,
 unprivileged user, no host mounts, and CPU/memory/process/time limits. They validate proposals;
 they do not run `kubectl apply`, `terraform plan`, or `terraform apply`.
 
-Gemini or Hugging Face inference and an explicitly human-approved test PR remain separate live
-integration stages. Provider adapter and live-app wiring tests use mocked HTTP and synthetic keys;
+Hosted inference and real publication are excluded from these automated container checks.
+Provider adapter and live-app wiring tests use mocked HTTP and synthetic keys;
 they do not establish live inference availability or response quality. See the
 [provider configuration](../README.md#selecting-gemini) for no-billing setup and boundaries.
 The deterministic offline dashboard remains usable independently of all these services.
@@ -103,3 +106,19 @@ disappear with the runner. The API key must never appear in source, logs, or gen
 
 The harness is `scripts/combined_live_workflow.py`; its offline unit tests use in-memory
 persistence, fixture models, and fixture validators and do not spend hosted-model quota.
+
+## Reviewed fresh-incident-to-PR demonstration
+
+The separate manual `reviewed-live-demo` workflow adds one continuous synthetic Kubernetes
+execution through actual publication. It allows at most two Gemini invocations, then saves the
+original Redis RDB, proposal and review evidence as a one-day artifact. A required GitHub
+environment review separates generation from publication. The second job receives only the
+repository job token, verifies GitHub's human approval history and the exact same-run bundle,
+restores the original Redis checkpoints, and resumes the pending native approval via the API.
+It never reconstructs an execution from an artifact, merges a PR or applies infrastructure.
+
+Unlike the older combined verification, this workflow deliberately uploads **synthetic-only**
+review evidence and a checkpoint snapshot. It requires explicit owner setup, cannot run as normal
+CI, rejects job reruns, and does not automatically clean up published branches/PRs. See the
+[demonstration runbook](demo-workflow.md) for setup, review, failure handling, readiness commands
+and an evidence ledger separating prior verified runs from new unverified workflow code.

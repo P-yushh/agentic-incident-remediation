@@ -5,13 +5,12 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any
 from urllib.parse import urlparse
 from uuid import UUID
 
 from fastapi.testclient import TestClient
 from langgraph.types import Checkpointer
-from pydantic import BaseModel
 
 from agentic_incident_remediation.api import RemediationService, create_app
 from agentic_incident_remediation.config import Settings
@@ -19,39 +18,16 @@ from agentic_incident_remediation.graph import DurableApprovalWorkflow
 from agentic_incident_remediation.llm import (
     FakeStructuredModel,
     GeminiStructuredModel,
-    ModelGatewayError,
     StructuredModel,
 )
+from agentic_incident_remediation.llm.budget import BudgetedModel
 from agentic_incident_remediation.models import PullRequestProposal, PullRequestRecord
 from agentic_incident_remediation.operations.publisher import OperationsError
 from agentic_incident_remediation.persistence import create_redis_checkpointer
 from agentic_incident_remediation.sandbox import DockerSandboxRunner, SandboxRunner
 from agentic_incident_remediation.schema_tools import LocalSchemaToolProvider
 
-ResponseModel = TypeVar("ResponseModel", bound=BaseModel)
 CALLS_PER_CASE = 2
-
-
-class BudgetedModel:
-    """Allow exactly one plan and one artifact invocation; never retry a live call."""
-
-    def __init__(self, delegate: StructuredModel) -> None:
-        self.delegate = delegate
-        self.calls = 0
-
-    def generate_structured(
-        self,
-        *,
-        system_prompt: str,
-        user_prompt: str,
-        response_model: type[ResponseModel],
-    ) -> ResponseModel:
-        if self.calls >= CALLS_PER_CASE:
-            raise ModelGatewayError("live smoke-test request budget exhausted; no request sent")
-        self.calls += 1
-        return self.delegate.generate_structured(
-            system_prompt=system_prompt, user_prompt=user_prompt, response_model=response_model
-        )
 
 
 class NoPublication:

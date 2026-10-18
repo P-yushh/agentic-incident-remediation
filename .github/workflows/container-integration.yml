@@ -9,6 +9,7 @@ on:
       - 'sandbox/**'
       - 'src/**'
       - 'tests/integration/**'
+      - 'scripts/reviewed_live_demo.py'
       - 'pyproject.toml'
   pull_request:
     paths:
@@ -16,6 +17,7 @@ on:
       - 'sandbox/**'
       - 'src/**'
       - 'tests/integration/**'
+      - 'scripts/reviewed_live_demo.py'
       - 'pyproject.toml'
 
 permissions:
@@ -76,6 +78,8 @@ jobs:
 
       - name: Verify real containers and cross-process Redis recovery
         id: integration
+        env:
+          AIR_REDIS_CONTAINER: ${{ job.services.redis.id }}
         run: >-
           python -m pytest tests/integration -m integration -vv
           --junitxml="${RUNNER_TEMP}/container-integration.xml"

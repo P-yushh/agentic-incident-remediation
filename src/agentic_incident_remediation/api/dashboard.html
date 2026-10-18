@@ -71,6 +71,7 @@
         <button id="open-simulator" type="button" aria-haspopup="dialog" aria-controls="simulator">Simulate incident</button>
       </header>
       <p class="lede">Inspect remediation proposals, review validation results, and approve or reject pull-request creation. Nothing is applied to infrastructure.</p>
+      <p class="status" id="runtime-mode" role="status">Runtime mode: checking…</p>
       <p class="muted" id="workspace-message" role="status"></p>
       <section class="grid" aria-label="Incident workspace">
         <aside class="card" aria-labelledby="queue-heading">
@@ -281,6 +282,11 @@
       }
       byId('approve').addEventListener('click', () => decide('approved'));
       byId('reject').addEventListener('click', () => decide('rejected'));
+      jsonRequest('/api/runtime').then((runtime) => {
+        byId('runtime-mode').textContent = `${runtime.mode.toUpperCase()} · Model: ${runtime.model} · Validation: ${runtime.validators} · PR: ${runtime.publication} · Storage: ${runtime.persistence}`;
+      }).catch(() => {
+        byId('runtime-mode').textContent = 'Runtime mode unavailable. Verify server configuration before creating an incident.';
+      });
     </script>
   </body>
 </html>
