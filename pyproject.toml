@@ -32,6 +32,7 @@ agentic-remediation-actions = "agentic_incident_remediation.actions.app:main"
 agentic-remediation-schema-mcp = "agentic_incident_remediation.schema_tools.server:main"
 
 [project.optional-dependencies]
+benchmark = ["PyYAML>=6,<7", "python-hcl2>=8.1,<9"]
 dev = [
   "mypy>=1.14,<2",
   "pytest>=8.3,<9",
