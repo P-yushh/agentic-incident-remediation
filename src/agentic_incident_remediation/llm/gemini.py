@@ -7,6 +7,7 @@ import httpx
 from pydantic import ValidationError
 
 from agentic_incident_remediation.config import ModelProvider, ReasoningEffort, Settings
+from agentic_incident_remediation.llm.diagnostics import ModelFailure
 from agentic_incident_remediation.llm.gateway import (
     ModelGatewayError,
     ModelOutputError,
@@ -40,6 +41,7 @@ class GeminiStructuredModel:
             base_url="https://generativelanguage.googleapis.com/v1beta/", timeout=30.0
         )
         self._owns_client = client is None
+        self.last_failure: ModelFailure | None = None
 
     @classmethod
     def from_settings(
@@ -68,6 +70,8 @@ class GeminiStructuredModel:
     ) -> StructuredResponse:
         """Make one bounded request and validate the final JSON locally."""
 
+        self.last_failure = None
+
         generation_config: dict[str, object] = {
             "temperature": 0,
             "candidateCount": 1,
@@ -93,19 +97,37 @@ class GeminiStructuredModel:
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as error:
+            status = error.response.status_code
+            self.last_failure = ModelFailure(
+                code=(
+                    "provider_rate_limit"
+                    if status == 429
+                    else "provider_auth"
+                    if status in {401, 403}
+                    else "provider_unavailable"
+                    if status >= 500
+                    else "provider_request"
+                )
+            )
             # Never echo provider bodies, request headers, prompts, or credential-bearing errors.
             raise ModelGatewayError(
                 f"Gemini request failed (HTTP {error.response.status_code}); no retry attempted"
             ) from None
         except httpx.HTTPError:
+            self.last_failure = ModelFailure(code="provider_network")
             raise ModelGatewayError("Gemini request failed; no retry attempted") from None
 
         try:
             content = _extract_gemini_content(response.json())
             return response_model.model_validate_json(content)
         except ValidationError:
+            self.last_failure = ModelFailure(code="model_output")
             raise ModelOutputError("Gemini output failed schema validation") from None
+        except ModelOutputError:
+            self.last_failure = ModelFailure(code="model_output")
+            raise
         except ValueError:
+            self.last_failure = ModelFailure(code="model_output")
             raise ModelOutputError("Gemini response is not valid JSON") from None
 
     def close(self) -> None:
