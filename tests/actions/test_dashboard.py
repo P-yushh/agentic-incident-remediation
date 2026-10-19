@@ -32,7 +32,7 @@ def test_start_progress_review_publication_and_saved_downloads(browser, service,
     assert "actions-dashboard.js" in browser.get("/").text
     assert "const terminal" not in browser.get("/").text  # Native controller is not loaded.
     script = browser.get("/actions-dashboard.js")
-    assert script.status_code == 200 and "live-consent" in script.text
+    assert script.status_code == 200 and "confirm_live_calls: true" in script.text
     identifier = start(browser).json()["id"]
     assert browser.get(f"/api/actions/runs/{identifier}/proposal").status_code == 404
     assert browser.get(f"/api/actions/runs/{identifier}/receipt").status_code == 404
@@ -88,18 +88,25 @@ def test_approved_workspace_assets_tabs_and_no_unsupported_controls(browser):
     assert scripts == [{"src": "/actions-dashboard.js", "defer": None}]
     buttons = [attrs for tag, attrs in parser.nodes if tag == "button"]
     assert not any(re.search(r"pause|resume|approve|reject", b.get("id", "")) for b in buttons)
-    consent = next(attrs for _, attrs in parser.nodes if attrs.get("id") == "live-consent")
-    assert "required" in consent and "checked" not in consent
+    assert 'id="live-consent"' not in html
+    assert 'id="runtime-mode"' not in html and 'id="connection-status"' not in html
+    assert "disabled>Simulate</button>" in html
+    assert 'title="Starts one simulation using up to two AI calls"' in html
     submit = next(attrs for _, attrs in parser.nodes if attrs.get("id") == "submit-incident")
     assert "disabled" in submit
     script = browser.get("/actions-dashboard.js").text
     # Every literal controller target must exist in the new shell.
     assert set(re.findall(r"byId\('([^']+)'\)", script)) <= set(ids)
     assert "innerHTML" not in script and "ArrowRight" in script
-    assert "No live metrics, pod logs, or cluster events were collected" in script
+    assert "No live cluster metrics, pod logs or events are collected" in html
+    assert 'id="theme-toggle"' in html and 'aria-label="Verdict"' in html
+    assert 'id="import-run-form"' not in html
     css = browser.get("/actions-dashboard.css")
     assert css.status_code == 200 and "text/css" in css.headers["content-type"]
     assert "--air-accent:#096b66" in css.text and "@media(max-width:600px)" in css.text
+    assert "@media(prefers-reduced-motion:reduce)" in css.text
+    assert ".air-step.active .air-step-circle { animation:workflow-pulse" in css.text
+    assert ".air-rejection h3 { color:var(--air-red)" in css.text
 
 
 def test_duplicate_dispatch_remains_idempotent_after_recreating_service(

@@ -1,0 +1,23 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: queue-worker
+  namespace: demo
+  labels:
+    app: queue-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: queue-worker
+  template:
+    metadata:
+      labels:
+        app: queue-worker
+    spec:
+      containers:
+        - name: worker
+          image: example/queue-worker:1.0
+          envFrom:
+            - configMapRef:
+                name: worker-config-old

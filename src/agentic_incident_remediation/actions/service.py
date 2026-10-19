@@ -1,5 +1,6 @@
 """Durable dispatch idempotency and conservative progress/evidence projection."""
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from threading import RLock
 from time import monotonic
@@ -11,8 +12,11 @@ from agentic_incident_remediation.actions.github import (
     DispatchUnknown,
     GitHubActionsClient,
 )
+from agentic_incident_remediation.actions.local_generation import generate_proposal, local_readiness
 from agentic_incident_remediation.actions.models import RunRecord
 from agentic_incident_remediation.actions.store import RunStore
+from agentic_incident_remediation.llm.diagnostics import FAILURE_MESSAGES, FailureCode
+from agentic_incident_remediation.models.base import utc_now
 from agentic_incident_remediation.review_scenarios import DemoScenario
 
 SAFE_STEPS = {
@@ -41,6 +45,7 @@ def failure_details(
         "failure_step": None,
         "failure_reason": None,
         "failure_url": None,
+        "failure_phase": None,
     }
     for job in jobs:
         if job.get("conclusion") not in {
@@ -87,6 +92,11 @@ def failure_details(
             failure_job=str(name),
             failure_step=str(safe_label),
             failure_reason=reason,
+            failure_phase="preparing"
+            if name == "prepare"
+            else "publishing"
+            if name == "publish"
+            else None,
             failure_url=f"https://github.com/{repository}/actions/runs/{run_id}/job/{identifier}"
             if type(identifier) is int and identifier > 0
             else None,
@@ -96,19 +106,145 @@ def failure_details(
 
 
 class ActionsService:
-    def __init__(self, github: GitHubActionsClient, store: RunStore) -> None:
+    def __init__(
+        self, github: GitHubActionsClient, store: RunStore, *, experimental_ollama: bool = False
+    ) -> None:
         if github.repository != store.repository:
             raise ValueError("client and local history repository must match")
         self.github = github
         self.store = store
         self._lock = RLock()
         self._checked: dict[UUID, float] = {}
+        self.experimental_ollama = experimental_ollama
+        self._closing = False
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="air-local-model")
+
+    def close(self) -> None:
+        self._closing = True
+        self._executor.shutdown(wait=False, cancel_futures=True)
+        self.github.close()
+
+    def start_local(
+        self, identifier: UUID, scenario: DemoScenario, output_tokens: int, timeout_seconds: int
+    ) -> RunRecord:
+        if not self.experimental_ollama:
+            raise ValueError("experimental Ollama mode is not enabled")
+        if not 128 <= output_tokens <= 8192 or not 10 <= timeout_seconds <= 1200:
+            raise ValueError("invalid local inference budget")
+        with self._lock:
+            try:
+                record = self.store.get(identifier)
+            except LookupError:
+                record = None
+            if record is not None:
+                if (
+                    record.scenario,
+                    record.generation_mode,
+                    record.ollama_output_tokens,
+                    record.ollama_timeout_seconds,
+                ) != (scenario, "ollama_local", output_tokens, timeout_seconds):
+                    raise ValueError("request ID already belongs to a different generation intent")
+                return record
+            readiness = self.github.readiness()
+            if not readiness.get("ollama_supported"):
+                raise ActionsError(
+                    "Publish the reviewed Ollama handoff workflow to main before local testing"
+                )
+            local_readiness()
+            record, inserted = self.store.begin(
+                RunRecord(
+                    id=identifier,
+                    repository=self.github.repository,
+                    owned=True,
+                    scenario=scenario,
+                    stage="local_generating",
+                    generation_mode="ollama_local",
+                    head_sha=readiness["head_sha"],
+                    ollama_output_tokens=output_tokens,
+                    ollama_timeout_seconds=timeout_seconds,
+                    notice="Experimental local generation. Validation and human review "
+                    "remain required in GitHub.",
+                )
+            )
+            if inserted:
+                self._executor.submit(self._generate_and_dispatch, record)
+            elif (
+                record.scenario,
+                record.generation_mode,
+                record.ollama_output_tokens,
+                record.ollama_timeout_seconds,
+            ) != (scenario, "ollama_local", output_tokens, timeout_seconds):
+                raise ValueError("request ID already belongs to a different generation intent")
+            return record
+
+    def _generate_and_dispatch(self, record: RunRecord) -> None:
+        try:
+            assert record.scenario is not None
+            proposal = generate_proposal(
+                record.scenario,
+                output_tokens=record.ollama_output_tokens or 8192,
+                timeout_seconds=record.ollama_timeout_seconds or 600,
+                should_stop=lambda: self._closing or self.store.get(record.id).stage == "cancelled",
+            )
+            with self._lock:
+                current = self.store.get(record.id)
+                if current.stage == "cancelled" or self._closing:
+                    return
+                readiness = self.github.readiness()
+                if (
+                    not readiness.get("ollama_supported")
+                    or readiness["head_sha"] != record.head_sha
+                ):
+                    raise ActionsError(
+                        "GitHub main changed during generation; inspect before starting a new run"
+                    )
+                proposal.wire()  # Size-check before recording any dispatch intent.
+                self.store.save(current.model_copy(update={"stage": "dispatching", "notice": None}))
+                try:
+                    run_id = self.github.dispatch(record.scenario, local=proposal)
+                except DispatchUnknown as error:
+                    self.store.save(
+                        current.model_copy(
+                            update={"stage": "dispatch_unknown", "notice": str(error)}
+                        )
+                    )
+                    return
+                self.store.save(
+                    current.model_copy(
+                        update={
+                            "stage": "queued",
+                            "run_id": run_id,
+                            "notice": None,
+                            "run_url": f"https://github.com/{record.repository}/actions/runs/{run_id}",
+                        }
+                    )
+                )
+        except Exception:
+            with self._lock:
+                current = self.store.get(record.id)
+                if current.stage != "cancelled":
+                    self.store.save(
+                        current.model_copy(
+                            update={
+                                "stage": "failed",
+                                "failure_origin": "local",
+                                "failure_phase": "preparing",
+                                "failure_reason": "Experimental local generation or GitHub handoff "
+                                "failed. Output may be incomplete, invalid or oversized, or the "
+                                "model may have timed out. No hosted fallback or automatic retry.",
+                                "completed_phases": ("queued",),
+                                "finished_at": utc_now(),
+                            }
+                        )
+                    )
 
     def start(self, identifier: UUID, scenario: DemoScenario = DemoScenario.OOM) -> RunRecord:
         with self._lock:
             try:
                 existing = self.store.get(identifier)
-                if (existing.scenario or DemoScenario.OOM) != scenario:
+                if (
+                    existing.scenario or DemoScenario.OOM
+                ) != scenario or existing.generation_mode != "gemini":
                     raise ValueError("request ID already belongs to a different scenario")
                 return existing
             except LookupError:
@@ -125,7 +261,9 @@ class ActionsService:
                 )
             )
             if not inserted:
-                if (record.scenario or DemoScenario.OOM) != scenario:
+                if (
+                    record.scenario or DemoScenario.OOM
+                ) != scenario or record.generation_mode != "gemini":
                     raise ValueError("request ID already belongs to a different scenario")
                 return record
             try:
@@ -206,9 +344,57 @@ class ActionsService:
                 ):
                     review, receipt = None, None
                     raise ValueError("evidence scenario differs from the dispatch intent")
+                if (
+                    review is not None
+                    and record.owned
+                    and review.generation_mode != record.generation_mode
+                ):
+                    review, receipt = None, None
+                    raise ValueError("evidence generation mode differs from the dispatch intent")
             except Exception:
                 # Untrusted metadata/ZIP/model content must not leak URLs or tokens via exceptions.
                 notice = "Evidence unavailable or failed verification. Inspect the GitHub run."
+            rejection = None
+            if (
+                completed
+                and conclusion == "failure"
+                and prepare.get("conclusion") == "success"
+                and publish.get("conclusion") == "failure"
+                and publish.get("steps") == []
+                and receipt is None
+            ):
+                try:
+                    rejection = self.github.review_rejection(record.run_id)
+                except ActionsError:
+                    rejection = record.review_rejection
+                    notice = (
+                        notice + " " if notice else ""
+                    ) + "Human-review decision unavailable; failure alone does not prove rejection."
+                if rejection is not None:
+                    stage = "rejected"
+            failures = failure_details(jobs, record.repository, record.run_id)
+            if rejection is not None:
+                failures = dict.fromkeys(failures)
+            diagnostic_code: FailureCode | None = None
+            completed_phases = []
+            if stage == "failed":
+                if prepare.get("status") in {"in_progress", "completed"}:
+                    completed_phases.append("queued")
+                if prepare.get("conclusion") == "success":
+                    completed_phases.append("preparing")
+                if receipt is not None:
+                    completed_phases.append("awaiting_review")
+                if failures["failure_step"] == (
+                    "Fresh alert through live inference, Docker validation and pending Redis review"
+                ):
+                    diagnostic_code = record.failure_code or "unknown"
+                    try:
+                        diagnostic = self.github.failure_diagnostic(prepare)
+                        if diagnostic is not None:
+                            diagnostic_code = diagnostic.code
+                    except ActionsError:
+                        pass
+                    failures["failure_reason"] = FAILURE_MESSAGES[diagnostic_code]
             record = record.model_copy(
                 update={
                     "stage": stage,
@@ -221,8 +407,14 @@ class ActionsService:
                     "review": review,
                     "receipt": receipt,
                     "scenario": review.scenario if review is not None else inferred_scenario,
+                    "generation_mode": review.generation_mode
+                    if review is not None
+                    else record.generation_mode,
                     "notice": notice,
-                    **failure_details(jobs, record.repository, record.run_id),
+                    "review_rejection": rejection,
+                    "failure_code": diagnostic_code,
+                    "completed_phases": tuple(completed_phases),
+                    **failures,
                 }
             )
             self.store.save(record)
@@ -232,6 +424,17 @@ class ActionsService:
     def cancel(self, identifier: UUID) -> RunRecord:
         with self._lock:
             record = self.refresh(identifier)
+            if record.owned and record.stage == "local_generating" and record.run_id is None:
+                record = record.model_copy(
+                    update={
+                        "stage": "cancelled",
+                        "finished_at": utc_now(),
+                        "notice": "Local cancellation recorded. The in-flight model request may "
+                        "finish, but its output will not be handed to GitHub.",
+                    }
+                )
+                self.store.save(record)
+                return record
             if not record.owned or not record.active or record.run_id is None:
                 raise ValueError("only an active run started by this dashboard may be cancelled")
             self.github.cancel(record.run_id)

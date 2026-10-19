@@ -17,6 +17,17 @@ on:
           - kubernetes_oom_killed
           - kubernetes_crash_loop
           - terraform_drift
+      generation_mode:
+        description: 'Gemini on the runner, or experimental pre-generated local Ollama output'
+        required: true
+        default: gemini
+        type: choice
+        options: [gemini, ollama_local]
+      local_proposal:
+        description: 'Typed synthetic proposal from the local dashboard; never shell commands'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -28,6 +39,7 @@ concurrency:
 env:
   AIR_CONFIRM_LIVE_DEMO: ${{ inputs.confirm_live_demo }}
   AIR_DEMO_SCENARIO: ${{ inputs.scenario }}
+  AIR_GENERATION_MODE: ${{ inputs.generation_mode || 'gemini' }}
   HF_TOKEN: ''
   GEMINI_API_KEY: ''
   GITHUB_TOKEN: ''
@@ -90,7 +102,8 @@ jobs:
       - name: Fresh alert through live inference, Docker validation and pending Redis review
         id: prepare
         env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEY: ${{ inputs.generation_mode != 'ollama_local' && secrets.GEMINI_API_KEY || '' }}
+          AIR_LOCAL_PROPOSAL: ${{ inputs.local_proposal }}
           AIR_REDIS_CONTAINER: ${{ job.services.redis.id }}
         run: >-
           python scripts/reviewed_live_demo.py prepare

@@ -54,6 +54,8 @@ class SyntheticGitHub:
         self.digest_override = None
         self.storage_url = "https://productionresultssa0.blob.core.windows.net/data/"
         self.jobs_override = None
+        self.approvals = []
+        self.approvals_status = 200
         budget = BudgetedModel(FixtureStructuredModel())
         workflow = DurableApprovalWorkflow(
             budget,
@@ -169,6 +171,9 @@ class SyntheticGitHub:
             return httpx.Response(self.dispatch_status, json=self.dispatch_body)
         if path == root + f"/actions/runs/{self.run_id}":
             return httpx.Response(200, json=self.run())
+        if path.endswith("/approvals"):
+            assert request.method == "GET"
+            return httpx.Response(self.approvals_status, json=self.approvals)
         if path.endswith("/jobs"):
             jobs = [
                 {

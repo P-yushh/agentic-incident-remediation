@@ -1,14 +1,15 @@
 'use strict';
 
 const byId = (id) => document.getElementById(id);
-const view = { runs: new Map(), scenarios: new Map(), selected: null, csrf: '', ready: false, busy: false, timer: null, failures: 0 };
-const finished = new Set(['completed', 'failed', 'cancelled']);
+const view = { runs: new Map(), scenarios: new Map(), diffs: new Map(), diffLoading: new Set(), section: 'incidents', selected: null, csrf: '', ready: false, ollamaEnabled: false, ollamaSupported: false, readinessMessage: 'Checking availability…', busy: false, timer: null, failures: 0 };
+const finished = new Set(['completed', 'failed', 'cancelled', 'rejected']);
 const simulator = byId('simulator');
 const labels = {
   dispatching: 'Sending request', dispatch_unknown: 'Dispatch outcome uncertain', queued: 'Queued',
+  local_generating: 'Generating locally · Ollama',
   preparing: 'Generating and validating', awaiting_review: 'Awaiting GitHub review',
   publishing: 'Publishing approved PR', completed: 'Workflow succeeded', failed: 'Workflow failed',
-  cancelled: 'Workflow cancelled',
+  cancelled: 'Workflow cancelled', rejected: 'Rejected by reviewer',
 };
 
 function setLink(id, url) {
@@ -16,32 +17,45 @@ function setLink(id, url) {
   if (url) element.href = url; else element.removeAttribute('href');
 }
 
-const consent = byId('live-consent');
 function selectedScenario() { return view.scenarios.get(byId('type').value); }
 function scenarioFor(run) { return view.scenarios.get(run.review?.scenario || run.scenario); }
-function resetConsent() {
-  consent.checked = false; byId('submit-incident').disabled = true;
-}
 function updateScenario() {
-  resetConsent();
   const spec = selectedScenario(); if (!spec) return;
   byId('service').value = spec.service; byId('title').value = spec.title;
-  byId('description').value = spec.description;
+  renderReadiness();
 }
 byId('type').addEventListener('change', updateScenario);
-consent.addEventListener('change', () => { byId('submit-incident').disabled = !consent.checked || !view.ready || view.busy; });
 const refreshButton = byId('refresh-run');
 refreshButton.addEventListener('click', () => poll(true));
 const progress = byId('actions-progress');
-const readiness = byId('actions-readiness');
 function renderReadiness() {
-  byId('simulator-readiness').textContent = view.ready
-    ? 'Ready. Starting requires deliberate consent below.' : readiness.textContent;
-  byId('submit-incident').disabled = !view.ready || !consent.checked || view.busy;
+  const active = [...view.runs.values()].some((run) => run.owned && !finished.has(run.stage));
+  const local = byId('generation-mode').value === 'ollama_local';
+  const localReady = !local || (view.ollamaEnabled && view.ollamaSupported);
+  byId('ollama-settings').hidden = !local;
+  byId('simulator-readiness').textContent = !localReady ? 'Experimental Ollama handoff is not published on GitHub main yet. Publish the reviewed workflow before testing.' : view.ready
+    ? active ? 'An incident is already in progress. Finish or cancel it before starting another.' : '' : view.readinessMessage;
+  byId('simulator-readiness').hidden = view.ready && localReady && !active;
+  byId('submit-incident').disabled = !view.ready || !localReady || !selectedScenario() || view.busy || active;
 }
-const importForm = byId('import-run-form');
-const importInput = byId('import-run');
-const importButton = importForm.querySelector('button');
+byId('generation-mode').addEventListener('change', renderReadiness);
+function applyTheme(theme) {
+  document.documentElement.dataset.appearance = theme;
+  const dark = theme === 'dark';
+  for (const [id, hidden] of [['theme-moon', dark], ['theme-sun', !dark]]) {
+    if (hidden) byId(id).setAttribute('hidden', ''); else byId(id).removeAttribute('hidden');
+  }
+  byId('theme-toggle').setAttribute('aria-label', `Switch to ${dark ? 'light' : 'dark'} theme`);
+  byId('theme-toggle').setAttribute('title', `Switch to ${dark ? 'light' : 'dark'} theme`);
+}
+let savedTheme;
+try { savedTheme = localStorage.getItem('air-appearance'); } catch { /* Theme still works without storage. */ }
+applyTheme(savedTheme === 'dark' ? 'dark' : 'light');
+byId('theme-toggle').addEventListener('click', () => {
+  const theme = document.documentElement.dataset.appearance === 'dark' ? 'light' : 'dark';
+  applyTheme(theme);
+  try { localStorage.setItem('air-appearance', theme); } catch { /* Optional preference only. */ }
+});
 const tabs = [...document.querySelectorAll('[data-tab]')];
 function showTab(name, focus = false) {
   for (const tab of tabs) {
@@ -60,9 +74,34 @@ tabs.forEach((tab, index) => {
     if (next < 0) return; event.preventDefault(); showTab(tabs[next].dataset.tab, true);
   });
 });
-byId('nav-incidents').addEventListener('click', () => { showTab('investigation'); byId('execution').focus(); });
-byId('nav-proposals').addEventListener('click', () => { showTab('proposal'); byId('execution').focus(); });
+function visibleRuns() {
+  return [...view.runs.values()].filter((run) => view.section !== 'proposals' || (run.stage === 'awaiting_review' && run.review && !run.receipt && !run.review_rejection));
+}
+function navigate(section) {
+  view.section = section;
+  const proposals = section === 'proposals';
+  for (const name of ['incidents', 'proposals']) {
+    byId(`nav-${name}`).className = 'air-nav-item' + (name === section ? ' is-current' : '');
+    if (name === section) byId(`nav-${name}`).setAttribute('aria-current', 'page');
+    else byId(`nav-${name}`).removeAttribute('aria-current');
+  }
+  byId('breadcrumb').textContent = proposals ? '/ Proposals' : '/ Incidents';
+  byId('page-heading').textContent = proposals ? 'Proposal workspace' : 'Incident workspace';
+  byId('page-description').textContent = proposals ? 'Validated changes awaiting human review.' : 'From an infrastructure alert to a reviewed change.';
+  byId('queue-heading').textContent = proposals ? 'Proposals' : 'Incident queue';
+  byId('queue-empty').textContent = proposals ? 'No proposals awaiting review.' : 'No incidents yet. Simulate an incident to get started.';
+  const runs = visibleRuns();
+  clearTimeout(view.timer);
+  if (!runs.some((run) => run.id === view.selected)) view.selected = runs[0]?.id || null;
+  byId('workspace-empty').hidden = !!runs.length || !proposals;
+  byId('execution-detail').hidden = !runs.length && proposals;
+  renderQueue(); showTab(proposals ? 'proposal' : 'investigation');
+  if (view.selected) { select(view.selected); byId('execution').focus(); }
+}
+byId('nav-incidents').addEventListener('click', () => navigate('incidents'));
+byId('nav-proposals').addEventListener('click', () => navigate('proposals'));
 byId('nav-policy').addEventListener('click', () => byId('policy').showModal());
+byId('footer-policy').addEventListener('click', () => byId('policy').showModal());
 byId('close-policy').addEventListener('click', () => byId('policy').close());
 
 function textElement(tag, text, className) {
@@ -79,6 +118,52 @@ function activityItem(title, detail, timestamp) {
     const time = textElement('time', new Date(timestamp).toLocaleString()); time.dateTime = timestamp; item.append(time);
   }
   return item;
+}
+
+function renderProposal(run) {
+  const review = run.review;
+  byId('code-view').className = 'air-diff' + (review ? ' is-comparison' : '');
+  byId('diff-count').textContent = ''; byId('diff-source').textContent = '';
+  if (!review) {
+    byId('artifact').textContent = 'A verified proposal will appear after preparation. Missing or expired evidence is not treated as a validation pass.';
+    return;
+  }
+  const key = `${run.id}:${review.artifact_sha256}`;
+  const comparison = view.diffs.get(key);
+  if (comparison) {
+    byId('diff-source').textContent = 'Compared with reference baseline · exact proposed file available to download.';
+    byId('comparison-source').textContent = comparison.baseline_label;
+    byId('diff-count').textContent = `+${comparison.additions} added · −${comparison.deletions} removed`;
+    byId('artifact').replaceChildren(...comparison.lines.filter((line) => !(line.kind === 'header' && line.text.startsWith('@@'))).map((line) => {
+      const row = document.createElement('span'); row.className = `diff-line ${line.kind}`;
+      const marker = line.kind === 'added' ? '+' : line.kind === 'removed' ? '-' : line.kind === 'context' ? ' ' : '';
+      row.append(textElement('span', marker, 'diff-marker'), textElement('span', line.text, 'diff-text'));
+      return row;
+    }));
+    if (!comparison.additions && !comparison.deletions) {
+      byId('code-view').className = 'air-diff';
+      byId('artifact').textContent = review.content;
+      byId('diff-source').textContent += ' · No differences. Showing the exact proposed file.';
+    }
+    return;
+  }
+  byId('artifact').textContent = 'Loading comparison…';
+  byId('diff-source').textContent = 'Comparing with reference baseline…';
+  if (view.diffLoading.has(key)) return;
+  view.diffLoading.add(key);
+  request(`/api/actions/runs/${run.id}/diff`).then((result) => {
+    if (result.artifact_sha256 !== review.artifact_sha256 || result.baseline_source !== 'synthetic_reference') throw new Error('Comparison does not match the verified proposal.');
+    view.diffs.set(key, result);
+    const current = view.runs.get(view.selected);
+    if (current?.id === run.id && current.review?.artifact_sha256 === review.artifact_sha256) renderProposal(current);
+  }).catch(() => {
+    const current = view.runs.get(view.selected);
+    if (current?.id === run.id && current.review?.artifact_sha256 === review.artifact_sha256) {
+      byId('code-view').className = 'air-diff';
+      byId('artifact').textContent = review.content;
+      byId('diff-source').textContent = 'Comparison unavailable. Showing the exact proposed file without highlights; no comparison is claimed.';
+    }
+  }).finally(() => view.diffLoading.delete(key));
 }
 
 async function request(url, options = {}) {
@@ -98,39 +183,46 @@ function age(run) {
   const seconds = Math.max(0, Math.floor(((stop ? Date.parse(stop) : Date.now()) - Date.parse(start)) / 1000));
   const hours = Math.floor(seconds / 3600); const minutes = Math.floor(seconds / 60) % 60;
   const text = (hours ? [hours, minutes, seconds % 60] : [minutes, seconds % 60]).map((value) => String(value).padStart(2, '0')).join(':');
-  return { text, note: run.review ? ' · alert age, stopped at review' : stop ? ' · run elapsed, stopped' : ' · run elapsed (alert not available yet)' };
+  return { text, note: run.review ? ' · stopped at review' : stop ? ' · stopped' : ' · in progress' };
 }
 function tickTimers() {
   document.querySelectorAll('[data-run-timer]').forEach((element) => {
     const run = view.runs.get(element.dataset.runTimer); if (!run) return;
-    const elapsed = age(run); element.textContent = elapsed.text + elapsed.note;
+    const elapsed = age(run); element.textContent = elapsed.text; element.setAttribute('title', elapsed.note.slice(3));
   });
   const run = view.runs.get(view.selected);
   if (run) { const elapsed = age(run); byId('elapsed-label').textContent = run.review ? 'Alert age' : 'Run elapsed'; byId('elapsed').textContent = elapsed.text; byId('elapsed-note').textContent = elapsed.note; }
+}
+function incidentAlias(run) {
+  const key = run.id.replaceAll('-', '').toUpperCase();
+  let length = 6;
+  while (length < key.length && [...view.runs.values()].some((other) => other.id !== run.id && other.id.replaceAll('-', '').toUpperCase().slice(0, length) === key.slice(0, length))) length += 2;
+  return `INC-${key.slice(0, length)}`;
 }
 function renderQueue() {
   const focused = document.activeElement;
   const focusedRun = focused?.dataset.run;
   const focusedAction = focused?.dataset.action;
-  byId('queue-empty').hidden = view.runs.size > 0;
-  const items = [...view.runs.values()].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)).map((run) => {
+  byId('queue-empty').hidden = visibleRuns().length > 0;
+  const items = visibleRuns().sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)).map((run) => {
     const item = document.createElement('li'); item.className = 'air-queue-item';
     const button = document.createElement('button'); button.type = 'button'; button.className = 'air-incident';
     button.dataset.run = run.id; button.dataset.action = 'select';
     button.setAttribute('aria-pressed', String(run.id === view.selected));
-    const meta = textElement('span', run.run_id ? `RUN ${run.run_id}` : `REQUEST ${run.id.slice(0, 8)}`, 'air-incident-top');
+    const meta = textElement('span', incidentAlias(run), 'air-incident-top');
     const spec = scenarioFor(run);
     const title = textElement('span', spec?.title || 'Scenario not yet verified', 'air-incident-title');
-    const detail = textElement('span', `${spec?.service || 'Service not yet verified'} · ${labels[run.stage]}`, 'air-incident-service');
-    const source = textElement('span', run.owned ? 'Dashboard-started · synthetic' : 'Read-only import · synthetic', 'air-incident-service');
+    const detail = textElement('span', `${spec?.service || 'Unknown service'} · ${spec?.validator === 'terraform_validate' ? 'Terraform' : spec ? 'Kubernetes' : 'Pending'}`, 'air-incident-service');
+    const stage = textElement('span', labels[run.stage], 'air-queue-stage' + (['failed', 'rejected'].includes(run.stage) ? ' red' : run.stage === 'completed' ? ' good' : ''));
     const timer = document.createElement('time'); timer.className = 'air-timer'; timer.dataset.runTimer = run.id;
-    button.append(meta, title, detail, source, timer); button.addEventListener('click', () => select(run.id)); item.append(button);
-    if (run.owned && run.run_id && !finished.has(run.stage)) {
+    const state = document.createElement('span'); state.className = 'air-incident-state'; state.append(stage, timer);
+    button.append(meta, title, detail, state); button.addEventListener('click', () => select(run.id)); item.append(button);
+    if (run.owned && (run.run_id || run.stage === 'local_generating') && !finished.has(run.stage)) {
       const cancel = document.createElement('button'); cancel.type = 'button'; cancel.className = 'air-button reject';
       cancel.dataset.run = run.id; cancel.dataset.action = 'cancel';
-      cancel.textContent = 'Cancel workflow'; cancel.disabled = view.busy;
+      cancel.textContent = run.stage === 'local_generating' ? 'Cancel generation' : 'Cancel workflow'; cancel.disabled = view.busy;
       cancel.addEventListener('click', async () => {
-        if (!window.confirm('Cancel this GitHub run? In-flight operations may finish, and an existing PR will NOT be undone.')) return;
+        if (!window.confirm(run.stage === 'local_generating' ? 'Cancel this local incident? The in-flight model request may finish, but its output will not be sent to GitHub.' : 'Cancel this GitHub run? In-flight operations may finish, and an existing PR will NOT be undone.')) return;
         view.busy = true; renderQueue();
         try { remember(await request(`/api/actions/runs/${run.id}/cancel`, { method: 'POST', body: '{}' })); }
         catch (error) { byId('queue-error').textContent = error.message; }
@@ -151,60 +243,80 @@ function renderQueue() {
 }
 function render(run) {
   const spec = scenarioFor(run);
+  const rejected = run.stage === 'rejected';
+  const rejectionDetail = rejected
+    ? `${run.review_rejection.reviewer} rejected this proposal in GitHub. Publication was stopped at human review; no remediation PR was created by this run. This is a review decision, not a technical failure.` : '';
   byId('status').textContent = labels[run.stage];
-  byId('status').className = 'air-label ' + (run.stage === 'completed' ? 'good' : ['failed', 'cancelled', 'dispatch_unknown'].includes(run.stage) ? 'red' : 'warn');
-  byId('run-label').textContent = run.run_id ? `RUN ${run.run_id}` : `REQUEST ${run.id.slice(0, 8)}`;
+  byId('status').className = 'air-label ' + (run.stage === 'completed' ? 'good' : ['failed', 'cancelled', 'dispatch_unknown', 'rejected'].includes(run.stage) ? 'red' : 'warn');
+  byId('run-label').textContent = incidentAlias(run);
   byId('execution').textContent = spec?.title || 'Scenario not yet verified';
-  byId('scenario-label').textContent = `Synthetic · ${spec?.validator === 'terraform_validate' ? 'Terraform' : spec ? 'Kubernetes' : 'unverified scenario'}`;
-  byId('execution-description').textContent = `${spec?.service || 'Unknown service'} · ${run.owned ? 'dashboard-started' : 'read-only import'} · source ${run.head_sha.slice(0, 8) || 'pending'} · no live monitoring`;
+  byId('scenario-label').textContent = spec?.validator === 'terraform_validate' ? 'Terraform' : spec ? 'Kubernetes' : 'Pending classification';
+  byId('execution-description').textContent = `${spec?.service || 'Unknown service'} · ${run.repository}${run.generation_mode === 'ollama_local' ? ' · Ollama · experimental' : ''}`;
   byId('investigation-title').textContent = spec?.label || 'No verified scenario evidence';
   byId('run-failure').hidden = run.stage !== 'failed';
   byId('failure-heading').textContent = run.failure_job ? `${run.failure_job} · ${run.failure_step || 'Job failed'}` : 'Workflow failed';
   byId('failure-detail').textContent = run.failure_reason || run.notice || 'No failure details are available. Inspect the GitHub run before retrying.';
   setLink('failure-link', run.failure_url || run.run_url);
+  byId('run-rejection').hidden = !rejected;
+  byId('rejection-detail').textContent = rejectionDetail;
+  setLink('rejection-link', rejected ? run.run_url : null);
   byId('workspace-message').textContent = run.notice || (run.stage === 'awaiting_review'
     ? 'Inspect the verified proposal, then approve or reject in GitHub. “Approve and deploy” authorizes PR creation only.'
+    : rejected ? 'Review complete · proposal retained for inspection · publication not authorized.'
     : 'Progress is polled from GitHub jobs, not streamed from individual agents.');
   const phases = ['queued', 'preparing', 'awaiting_review', 'publishing', 'completed'];
   const phaseNames = ['Queued', 'Generate & validate', 'Human review', 'Publish PR', 'Complete'];
-  const position = phases.indexOf(run.stage);
+  const position = rejected ? 2 : run.stage === 'local_generating' ? 1 : phases.indexOf(run.stage);
+  const failurePosition = run.stage === 'failed' ? phases.indexOf(run.failure_phase) : -1;
   progress.replaceChildren(...phases.map((phase, index) => {
     const item = document.createElement('li');
-    item.className = 'air-step' + (position > index || run.stage === 'completed' ? ' done' : run.stage === phase ? ' active' : '');
-    item.append(textElement('span', position > index || run.stage === 'completed' ? '✓' : String(index + 1), 'air-step-circle'), textElement('span', phaseNames[index]));
-    if (run.stage === phase) item.setAttribute('aria-current', 'step'); return item;
+    const passed = position > index || run.stage === 'completed' || (run.stage === 'failed' && (run.completed_phases || []).includes(phase));
+    const failedHere = failurePosition === index;
+    const notRun = (rejected && index > 2) || (failurePosition >= 0 && index > failurePosition);
+    const activePhase = run.stage === phase || (run.stage === 'local_generating' && index === 1);
+    item.className = 'air-step' + (failedHere ? ' failed' : passed ? ' done' : rejected && index === 2 ? ' rejected' : notRun ? ' not-run' : activePhase ? ' active' : '');
+    item.append(textElement('span', passed ? '✓' : rejected && index === 2 ? '×' : String(index + 1), 'air-step-circle'), textElement('span', failedHere ? `${phaseNames[index]} · failed` : rejected && index === 2 ? 'Review rejected' : notRun ? `${phaseNames[index]} · not run` : phaseNames[index]));
+    if (activePhase) item.setAttribute('aria-current', 'step'); return item;
   }));
   byId('job-step').textContent = run.steps.length ? `Current job step: ${run.steps.join('; ')}` : `Workflow status: ${labels[run.stage]}`;
   const review = run.review;
-  byId('artifact').textContent = review?.content || 'A verified proposal will appear after preparation. Missing or expired evidence is not treated as a validation pass.';
+  renderProposal(run);
   byId('artifact-path').textContent = review?.artifact_path || 'No verified artifact yet';
   byId('validation-status').textContent = review ? '✓ Verified validation passed' : 'Awaiting verified evidence';
   byId('validation-status').className = 'air-label ' + (review ? 'good' : 'warn');
   byId('proposal-summary').textContent = review
-    ? `Generated ${review.validation_tool === 'terraform_validate' ? 'Terraform configuration' : 'Deployment'} for the selected synthetic scenario. Full proposed file shown below; no baseline diff or deployment is implied.`
+    ? `${review.validation_tool === 'terraform_validate' ? 'Terraform configuration' : 'Deployment configuration'} validated with ${review.validation_tool}. Review the highlighted changes before approving publication.`
     : 'Preparation must finish and its artifact must pass verification before a proposal is shown.';
   byId('validation-details').replaceChildren(...(review ? [textElement('span', `✓ ${review.validation_tool} passed`), textElement('span', '✓ Artifact checksum verified'), textElement('span', '◇ Not applied')] : []));
+  byId('validation-counts').textContent = review
+    ? review.validation_attempts != null && review.validation_passes != null
+      ? `${review.validation_attempts} validation attempt${review.validation_attempts === 1 ? '' : 's'} · ${review.retry_count == null ? 'Retries not recorded' : `${review.retry_count} retr${review.retry_count === 1 ? 'y' : 'ies'}`} · ${review.validation_passes} passed`
+      : 'Validation attempt and retry counts were not recorded in this saved evidence.'
+    : 'Validation counts will appear after verified evidence is available.';
   byId('provenance').hidden = !review;
   byId('artifact-hash').textContent = review?.artifact_sha256 || '';
   byId('execution-id').textContent = review?.execution_id || '';
-  byId('model-calls').textContent = review ? `${review.model_calls} / 2 (recorded by workflow)` : '';
+  byId('github-run-id').textContent = run.run_id ? `${run.run_id} · source ${run.head_sha}` : 'Pending dispatch';
+  byId('model-calls').textContent = review ? review.generation_mode === 'ollama_local' ? 'Local proposal · 0 hosted inference calls on GitHub' : `${review.model_calls} / 2 (recorded by workflow)` : '';
   byId('evidence-list').replaceChildren(
-    evidenceItem('Incident source', 'Fixed synthetic scenario, not a real-time alert. No live metrics, pod logs, or cluster events were collected.'),
-    evidenceItem('Requested remediation', spec ? `${spec.description} These are scenario inputs, not observed resource state.` : 'Scenario inputs are not available until verified evidence is loaded.'),
+    evidenceItem('Incident source', 'Simulator request. See approval policy for execution scope and data sources.'),
+    evidenceItem('Requested remediation', spec ? spec.description : 'Incident details are not available until verified evidence is loaded.'),
     evidenceItem('Validation evidence', review ? `Verified workflow artifact records a passing ${review.validation_tool} check. Schema validation is not a runtime recovery test.` : 'No verified review artifact is available for this run.'),
     evidenceItem('Source provenance', `Repository: ${run.repository}. Source commit: ${run.head_sha || 'pending'}. ${run.owned ? 'Started through this dashboard.' : 'Imported read-only; cancellation is disabled.'}`),
   );
   const events = [];
   if (run.owned) events.push(activityItem('Run requested', 'Saved in local history before dispatch.', run.created_at));
-  if (run.started_at) events.push(activityItem('GitHub run started', 'Preparation runs Gemini and validators on the remote runner.', run.started_at));
+  if (run.started_at) events.push(activityItem('GitHub run started', run.generation_mode === 'ollama_local' ? 'Local Ollama output is validated on GitHub without hosted inference.' : 'Preparation runs Gemini and validators on the remote runner.', run.started_at));
   if (review) events.push(activityItem('Verified proposal ready for review', `${review.validation_tool} passed; alert-age timer stopped at the native review request.`, review.requested_at));
   if (run.receipt) events.push(activityItem('Verified publication receipt', `PR #${run.receipt.pull_request.number} created after review by ${run.receipt.reviewer}. Zero additional model calls for publication.`));
-  if (run.finished_at) events.push(activityItem(labels[run.stage], 'GitHub workflow completion time; not an infrastructure recovery time.', run.finished_at));
+  if (run.finished_at) events.push(activityItem(labels[run.stage], rejected ? `${rejectionDetail} Timestamp is workflow completion, not the exact review-decision time.` : 'GitHub workflow completion time; not an infrastructure recovery time.', run.finished_at));
   if (!run.owned) events.push(activityItem('Run imported read-only', 'Saved in local history. Viewing history does not call a model.', run.created_at));
   if (run.notice) events.push(activityItem('Run notice', run.notice));
   byId('activity-list').replaceChildren(...events);
-  byId('decision-title').textContent = run.receipt ? 'Human-reviewed PR created' : run.stage === 'awaiting_review' ? 'Ready for human review' : 'Human-reviewed changes only';
-  byId('decision-note').textContent = run.receipt ? 'Review the PR independently before any merge or deployment.' : 'Approval and rejection take place in GitHub, not in this dashboard.';
+  byId('verdict-status').textContent = rejected ? 'Rejected' : run.receipt ? 'Approved · PR created' : run.stage === 'awaiting_review' ? 'Awaiting review' : run.stage === 'failed' ? 'Failed' : run.stage === 'cancelled' ? 'Cancelled' : run.stage === 'completed' ? 'Publication unverified' : 'WIP';
+  byId('verdict-status').className = 'air-label ' + (run.receipt ? 'good' : ['failed', 'rejected'].includes(run.stage) ? 'red' : 'warn');
+  byId('decision-title').textContent = run.stage === 'failed' ? (run.failure_origin === 'local' ? 'Local generation or handoff failed' : run.run_id ? 'Execution failed on GitHub' : 'Could not start GitHub execution') : rejected ? 'Proposal rejected · publication blocked' : run.receipt ? 'Human-reviewed PR created' : run.stage === 'awaiting_review' ? 'Ready for human review' : 'Human-reviewed changes only';
+  byId('decision-note').textContent = run.stage === 'failed' ? (run.failure_reason || run.notice || 'GitHub execution did not complete. Inspect the failed job; the underlying cause is unavailable.') : rejected ? 'The safety gate worked: nothing was published, merged or deployed by this run.' : run.receipt ? 'Review the PR independently before any merge or deployment.' : 'Approval and rejection take place in GitHub, not in this dashboard.';
   byId('github-review').textContent = run.stage === 'awaiting_review' ? 'Review in GitHub ↗' : 'Open GitHub run ↗';
   byId('publication').hidden = !run.receipt && run.stage !== 'completed';
   byId('publication-title').textContent = run.receipt ? `Remediation PR #${run.receipt.pull_request.number}` : 'Publication evidence unavailable';
@@ -219,7 +331,9 @@ function render(run) {
   refreshButton.disabled = false; tickTimers();
 }
 function remember(run) {
-  view.runs.set(run.id, run); renderQueue(); if (view.selected === run.id) render(run);
+  view.runs.set(run.id, run);
+  if (view.section === 'proposals' && view.selected === run.id && !visibleRuns().some((item) => item.id === run.id)) { navigate('proposals'); return; }
+  renderQueue(); if (view.selected === run.id) render(run);
 }
 function select(identifier) {
   clearTimeout(view.timer); view.selected = identifier; view.failures = 0;
@@ -234,19 +348,21 @@ async function poll(manual = false) {
     view.failures += 1; if (view.selected === identifier) byId('execution-error').textContent = error.message;
   }
   const run = view.runs.get(identifier);
-  if (view.selected === identifier && run?.run_id && !finished.has(run.stage)) {
+  if (view.selected === identifier && (run?.run_id || run?.stage === 'local_generating' || run?.stage === 'dispatching') && !finished.has(run.stage)) {
     view.timer = setTimeout(poll, Math.min(60000, 5000 * (2 ** Math.min(view.failures, 4))));
   }
 }
 byId('open-simulator').addEventListener('click', () => {
-  resetConsent();
   renderReadiness();
   byId('simulator-error').textContent = ''; simulator.showModal();
 });
 for (const id of ['close-simulator', 'cancel-simulator']) byId(id).addEventListener('click', () => simulator.close());
 byId('incident-form').addEventListener('submit', async (event) => {
-  event.preventDefault(); if (!consent.checked || !view.ready || view.busy || !selectedScenario()) return;
+  event.preventDefault(); renderReadiness(); if (byId('submit-incident').disabled) return;
   const scenario = selectedScenario().id;
+  const mode = byId('generation-mode').value;
+  const outputTokens = Number(byId('ollama-output-tokens').value || 8192);
+  const timeoutSeconds = Number(byId('ollama-timeout').value || 600);
   view.busy = true; byId('submit-incident').disabled = true; byId('type').disabled = true;
   try {
     const saved = localStorage.getItem('air-actions-pending-request');
@@ -254,39 +370,36 @@ byId('incident-form').addEventListener('submit', async (event) => {
     try { pending = saved ? JSON.parse(saved) : null; }
     catch { pending = { request_id: saved, scenario: 'kubernetes_oom_killed' }; }
     if (pending && pending.scenario !== scenario) throw new Error('An unresolved request belongs to another scenario. Inspect that run before starting a different case.');
+    if (pending && ((pending.mode || 'gemini') !== mode || (mode === 'ollama_local' && (pending.outputTokens !== outputTokens || pending.timeoutSeconds !== timeoutSeconds)))) throw new Error('An unresolved request belongs to another generation mode or budget. Restore the previous selection before retrying.');
     const identifier = pending?.request_id || crypto.randomUUID();
-    localStorage.setItem('air-actions-pending-request', JSON.stringify({ request_id: identifier, scenario }));
-    const run = await request('/api/actions/runs', { method: 'POST', body: JSON.stringify({ request_id: identifier, confirm_live_calls: true, scenario }) });
-    localStorage.removeItem('air-actions-pending-request'); remember(run); simulator.close(); select(run.id);
+    localStorage.setItem('air-actions-pending-request', JSON.stringify({ request_id: identifier, scenario, mode, outputTokens, timeoutSeconds }));
+    const run = await request('/api/actions/runs', { method: 'POST', body: JSON.stringify({ request_id: identifier, confirm_live_calls: true, scenario, generation_mode: mode, ollama_output_tokens: outputTokens, ollama_timeout_seconds: timeoutSeconds }) });
+    localStorage.removeItem('air-actions-pending-request'); navigate('incidents'); remember(run); simulator.close(); select(run.id);
   } catch (error) {
     byId('simulator-error').textContent = `${error.message} The same request ID is retained; there is no automatic dispatch retry.`;
-  } finally { view.busy = false; renderQueue(); byId('type').disabled = false; resetConsent(); }
-});
-importForm.addEventListener('submit', async (event) => {
-  event.preventDefault(); const runId = Number(importInput.value.trim());
-  if (!Number.isSafeInteger(runId) || runId < 1 || view.busy) return;
-  view.busy = true; importButton.disabled = true; byId('queue-error').textContent = '';
-  try { const run = await request('/api/actions/import', { method: 'POST', body: JSON.stringify({ run_id: runId }) }); remember(run); select(run.id); }
-  catch (error) { byId('queue-error').textContent = error.message; }
-  finally { view.busy = false; importButton.disabled = false; renderQueue(); }
+  } finally { view.busy = false; renderQueue(); byId('type').disabled = false; renderReadiness(); }
 });
 
 async function initialize() {
   try {
     const session = await request('/api/actions/session'); view.csrf = session.csrf;
+    try { const modes = await request('/api/actions/generation-modes'); view.ollamaEnabled = modes.experimental_ollama === true; }
+    catch { view.ollamaEnabled = false; } // Older local servers keep the default workflow usable.
+    const localOption = byId('generation-mode').querySelector('option[value="ollama_local"]');
+    if (localOption) localOption.disabled = !view.ollamaEnabled;
     const scenarios = await request('/api/actions/scenarios');
     for (const spec of scenarios) view.scenarios.set(spec.id, spec);
     byId('type').replaceChildren(...scenarios.map((spec) => new Option(spec.label, spec.id)));
     byId('type').disabled = false; updateScenario();
-    byId('runtime-mode').textContent = `ACTIONS · ${session.repository} · Live Gemini + validators on GitHub · Connection details`;
     const runs = await request('/api/actions/runs'); for (const run of runs) view.runs.set(run.id, run);
     renderQueue(); if (runs.length) select(runs[0].id);
     try {
       const status = await request('/api/actions/readiness'); view.ready = status.ready;
-      readiness.textContent = `${status.message}. Provider billing/quota and token write permission are not verified by this read-only check.`;
-    } catch (error) { readiness.textContent = `Starting is disabled: ${error.message} Existing runs can still be inspected.`; }
+      view.ollamaSupported = status.ollama_supported === true;
+      view.readinessMessage = `${status.message}. Provider billing/quota and token write permission are not verified by this read-only check.`;
+    } catch (error) { view.readinessMessage = `Starting is disabled: ${error.message} Existing runs can still be inspected.`; }
     renderQueue();
-  } catch (error) { byId('runtime-mode').textContent = 'Actions session unavailable'; readiness.textContent = error.message; }
+  } catch (error) { view.readinessMessage = error.message; byId('queue-error').textContent = error.message; }
   finally { renderReadiness(); }
 }
 setInterval(tickTimers, 1000);

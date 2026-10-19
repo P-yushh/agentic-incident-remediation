@@ -8,6 +8,7 @@ import os
 import re
 import subprocess
 import time
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,8 @@ from agentic_incident_remediation.config import Settings
 from agentic_incident_remediation.graph import DurableApprovalWorkflow
 from agentic_incident_remediation.llm import FakeStructuredModel, GeminiStructuredModel
 from agentic_incident_remediation.llm.budget import BudgetedModel
+from agentic_incident_remediation.llm.diagnostics import ModelFailure, ReportedModelFailure
+from agentic_incident_remediation.llm.local_handoff import parse_local_proposal
 from agentic_incident_remediation.operations import GitHubPullRequestPublisher
 from agentic_incident_remediation.persistence import create_redis_checkpointer
 from agentic_incident_remediation.review_demo import (
@@ -188,7 +191,21 @@ def summary(text: str) -> None:
 def prepare(directory: Path, provenance: dict[str, str]) -> None:
     if os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or os.environ.get("HF_TOKEN"):
         raise ValueError("preparation must not receive repository or alternative-provider tokens")
-    if not os.environ.get("GEMINI_API_KEY", "").strip():
+    local_mode = os.environ.get("AIR_GENERATION_MODE", "gemini") == "ollama_local"
+    if os.environ.get("AIR_GENERATION_MODE", "gemini") not in {"gemini", "ollama_local"}:
+        raise ValueError("unsupported generation mode")
+    local = (
+        parse_local_proposal(
+            os.environ.get("AIR_LOCAL_PROPOSAL", ""), DemoScenario(provenance["scenario"])
+        )
+        if local_mode
+        else None
+    )
+    if local_mode and os.environ.get("GEMINI_API_KEY"):
+        raise ValueError("local handoff must not receive hosted model credentials")
+    if not local_mode and os.environ.get("AIR_LOCAL_PROPOSAL"):
+        raise ValueError("local proposal requires explicit local mode")
+    if not local_mode and not os.environ.get("GEMINI_API_KEY", "").strip():
         raise ValueError("configure the GEMINI_API_KEY repository secret")
     with Redis.from_url(REDIS_URL, socket_timeout=5) as redis:
         if redis.dbsize() != 0:
@@ -201,7 +218,12 @@ def prepare(directory: Path, provenance: dict[str, str]) -> None:
         max_reflection_attempts=1,
         model_max_output_tokens=1200,
     )
-    with GeminiStructuredModel.from_settings(settings) as model:
+    model_context = (
+        nullcontext(FakeStructuredModel([local.plan, local.artifact]))
+        if local is not None
+        else GeminiStructuredModel.from_settings(settings)
+    )
+    with model_context as model:
         budget = BudgetedModel(model)
         workflow = DurableApprovalWorkflow(
             budget,
@@ -213,9 +235,30 @@ def prepare(directory: Path, provenance: dict[str, str]) -> None:
             checkpointer=create_redis_checkpointer(REDIS_URL),
             max_retries=1,
         )
-        manifest = prepare_review(
-            workflow, budget, provenance, DemoScenario(provenance.get("scenario", DemoScenario.OOM))
-        )
+        try:
+            arguments = (
+                workflow,
+                budget,
+                provenance,
+                DemoScenario(provenance.get("scenario", DemoScenario.OOM)),
+            )
+            manifest = (
+                prepare_review(
+                    *arguments, incident_id=local.incident_id, occurred_at=local.occurred_at
+                )
+                if local is not None
+                else prepare_review(*arguments)
+            )
+        except Exception:
+            if isinstance(model, GeminiStructuredModel) and model.last_failure is not None:
+                raise ReportedModelFailure(model.last_failure) from None
+            raise
+    if local is not None:
+        manifest["generation_mode"] = "ollama_local"
+        manifest["generation_model"] = local.model
+        manifest["remote_inference_calls"] = 0
+        manifest["replayed_model_stages"] = 2
+        manifest["local_output_tokens"] = local.output_tokens
     safe_write(directory / "manifest.json", manifest)
     (directory / "proposal.yaml").write_text(
         manifest["state"]["artifacts"][0]["content"], encoding="utf-8"
@@ -235,8 +278,13 @@ def prepare(directory: Path, provenance: dict[str, str]) -> None:
         f"Artifact SHA-256: `{manifest['artifact_sha256']}`\n\n"
         f"Bundle SHA-256: `{digest}`\n\n"
         f"Scenario: `{manifest['scenario']}`. "
-        "Model invocations: 2 / 2. Real "
-        f"{SCENARIOS[DemoScenario(manifest['scenario'])].validator}: "
+        + (
+            "Supplied local Ollama proposal. Remote inference calls: 0. "
+            "Replayed typed model stages: 2. Real "
+            if local is not None
+            else "Model invocations: 2 / 2. Real "
+        )
+        + f"{SCENARIOS[DemoScenario(manifest['scenario'])].validator}: "
         "passed. Nothing deployed."
     )
 
@@ -289,8 +337,16 @@ def main() -> int:
             prepare(args.bundle, provenance)
         else:
             publish(args.bundle, provenance)
-    except Exception:
+    except Exception as error:
         # Exceptions can carry model output, request headers or connection details.
+        diagnostic = (
+            error.diagnostic
+            if isinstance(error, ReportedModelFailure)
+            else ModelFailure(code="unknown")
+        )
+        print(
+            "::error title=Remediation diagnostic::AIR_FAILURE_V1 " + diagnostic.model_dump_json()
+        )
         print("Demo stopped safely. Check setup, quota, review evidence and job step status.")
         return 1
     return 0

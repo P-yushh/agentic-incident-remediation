@@ -16,6 +16,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from starlette.middleware.base import RequestResponseEndpoint
 
+from agentic_incident_remediation.actions.diff import ProposalDiff, proposal_diff
 from agentic_incident_remediation.actions.github import ActionsError, GitHubActionsClient
 from agentic_incident_remediation.actions.models import ImportRun, RunRecord, StartRun
 from agentic_incident_remediation.actions.service import ActionsService
@@ -35,7 +36,7 @@ def create_actions_app(service: ActionsService, *, port: int = 8001) -> FastAPI:
         try:
             yield
         finally:
-            service.github.close()
+            service.close()
 
     app = FastAPI(title="Actions-backed Incident Remediation", lifespan=lifespan)
 
@@ -98,7 +99,9 @@ def create_actions_app(service: ActionsService, *, port: int = 8001) -> FastAPI:
     def runtime() -> dict[str, str]:
         return {
             "mode": "actions",
-            "model": "Gemini on GitHub (at most 2 calls per consent)",
+            "model": "Gemini default; experimental local Ollama selectable (at most 2 calls)"
+            if service.experimental_ollama
+            else "Gemini on GitHub (at most 2 calls per consent)",
             "validators": "real Docker on GitHub",
             "publication": "required review in GitHub",
             "persistence": "local SQLite history; remote synthetic artifacts expire",
@@ -120,12 +123,25 @@ def create_actions_app(service: ActionsService, *, port: int = 8001) -> FastAPI:
     def scenarios() -> list[dict[str, str]]:
         return [spec.public() for spec in SCENARIOS.values()]
 
+    @app.get("/api/actions/generation-modes")
+    def generation_modes() -> dict[str, Any]:
+        return {"experimental_ollama": service.experimental_ollama, "model": "qwen3:8b"}
+
     @app.get("/api/actions/runs", response_model=tuple[RunRecord, ...])
     def runs() -> tuple[RunRecord, ...]:
         return service.store.list()
 
     @app.post("/api/actions/runs", response_model=RunRecord, status_code=202)
     def start(payload: StartRun) -> Any:
+        if payload.generation_mode == "ollama_local":
+            return translate(
+                lambda: service.start_local(
+                    payload.request_id,
+                    payload.scenario,
+                    payload.ollama_output_tokens,
+                    payload.ollama_timeout_seconds,
+                )
+            )
         return translate(lambda: service.start(payload.request_id, payload.scenario))
 
     @app.post("/api/actions/import", response_model=RunRecord)
@@ -154,6 +170,14 @@ def create_actions_app(service: ActionsService, *, port: int = 8001) -> FastAPI:
                 + '"',
             },
         )
+
+    @app.get("/api/actions/runs/{identifier}/diff", response_model=ProposalDiff)
+    def diff(identifier: UUID) -> Any:
+        record: RunRecord = translate(lambda: service.store.get(identifier))
+        review = record.review
+        if review is None:
+            raise HTTPException(404, "verified proposal is not available")
+        return translate(lambda: proposal_diff(review))
 
     @app.get("/api/actions/runs/{identifier}/receipt")
     def receipt(identifier: UUID) -> Response:
@@ -200,6 +224,11 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8001)
     parser.add_argument("--repository", default="P-yushh/agentic-incident-remediation")
     parser.add_argument(
+        "--experimental-ollama",
+        action="store_true",
+        help="Temporarily expose local Ollama testing mode; no automatic hosted fallback",
+    )
+    parser.add_argument(
         "--history", type=Path, default=Path(".agent-runs/actions-dashboard.sqlite3")
     )
     args = parser.parse_args()
@@ -207,7 +236,11 @@ def main() -> None:
         parser.error("port must be between 1024 and 65535")
     try:
         github = GitHubActionsClient(token=github_credential(), repository=args.repository)
-        service = ActionsService(github, RunStore(args.history, args.repository))
+        service = ActionsService(
+            github,
+            RunStore(args.history, args.repository),
+            experimental_ollama=args.experimental_ollama,
+        )
     except ValueError:
         parser.error(
             "Configure a valid repository and server-side GitHub credential; no browser key needed"
