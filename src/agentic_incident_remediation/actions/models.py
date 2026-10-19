@@ -106,6 +106,9 @@ class RunRecord(StrictModel):
     review: ReviewEvidence | None = None
     receipt: PublicationReceipt | None = None
     notice: str | None = None
+    last_synced_at: AwareDatetime | None = None
+    sync_error: str | None = None
+    evidence_status: Literal["pending", "verified", "unavailable", "invalid", "expired"] = "pending"
 
     @property
     def active(self) -> bool:

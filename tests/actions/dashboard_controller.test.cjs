@@ -59,9 +59,11 @@ async function harness({runs = [], ready = true, ollamaEnabled = false, ollamaSu
   const requests = []; const storage = new Map(saved ? [['air-actions-pending-request', saved]] : []);
   if (appearance) storage.set('air-appearance',appearance);
   const records = new Map(runs.map(r => [r.id, r])); let fail = failDispatch;
+  const timers = new Map(); let timerId = 0;
   const context = vm.createContext({document, console, crypto, Date,
     Option: function(text, value) { const option = document.createElement('option'); option.textContent = text; option.value = value; return option; },
-    setTimeout:()=>1, clearTimeout:()=>{}, setInterval:()=>1,
+    setTimeout:(callback,delay)=>{timers.set(++timerId,{callback,delay});return timerId;},
+    clearTimeout:id=>timers.delete(id), setInterval:()=>1,
     window:{confirm:()=>confirm},
     localStorage:{getItem:key=>storage.get(key)||null, setItem:(key,value)=>storage.set(key,value), removeItem:key=>storage.delete(key)},
     fetch: async (url, options = {}) => {
@@ -88,10 +90,44 @@ async function harness({runs = [], ready = true, ollamaEnabled = false, ollamaSu
     }});
   vm.runInContext(controller, context); await flush(); await flush();
   assert.equal(get('queue-error').textContent,'');
-  return {get,requests,storage,records,context,document,allowDispatch:()=>{fail=false;},
+  return {get,requests,storage,records,context,document,timers,allowDispatch:()=>{fail=false;},
+    nextPoll:async()=>{const [id,timer]=timers.entries().next().value;timers.delete(id);await timer.callback();await flush();},
     change:async id=>{get('type').value=id; await get('type').emit('change');},
     submit:async()=>{await get('incident-form').emit('submit'); await flush();}};
 }
+
+test('completed runs keep checking for verified evidence and stop after recovery without writes', async()=>{
+  const record=runRecord(specs[0].id,{stage:'completed',evidence_status:'unavailable'});
+  const h=await harness({runs:[record]});
+  assert.equal(h.timers.size,1);
+  assert.match(h.get('proposal-summary').textContent,/not been loaded and verified/);
+  const review={scenario:specs[0].id,content:'verified file',artifact_sha256:'a'.repeat(64)};
+  h.records.set(record.id,{...record,review,receipt:{pull_request:{url:'https://github.com/example/demo/pull/42',number:42}},evidence_status:'verified'});
+  await h.nextPoll();
+  assert.equal(h.timers.size,0);
+  assert.equal(h.get('proposal-download').hidden,false);
+  assert.equal(h.requests.filter(r=>r.method==='POST').length,0);
+});
+
+test('invalid evidence does not loop; missing evidence has bounded read-only retries and manual recovery', async()=>{
+  const invalid=await harness({runs:[runRecord(specs[0].id,{stage:'completed',evidence_status:'invalid'})]});
+  assert.equal(invalid.timers.size,0);
+  const missing=await harness({runs:[runRecord(specs[0].id,{stage:'completed',evidence_status:'unavailable'})]});
+  for(let i=0;i<10;i++) await missing.nextPoll();
+  assert.equal(missing.timers.size,0);
+  assert.match(missing.get('execution-error').textContent,/paused/);
+  await missing.get('refresh-run').emit('click'); await flush();
+  assert.equal(missing.timers.size,1);
+  assert.equal(missing.requests.filter(r=>r.method==='POST').length,0);
+});
+
+test('cached review status is labelled and missing evidence is not presented as ready for review', async()=>{
+  const h=await harness({runs:[runRecord(specs[0].id,{sync_error:'Connection to GitHub API timed out.',last_synced_at:'2026-10-19T10:00:00Z'})]});
+  assert.match(h.get('sync-status').textContent,/Cached status.*timed out/);
+  assert.equal(h.get('decision-title').textContent,'Proposal evidence unavailable');
+  assert.equal(h.timers.size,1);
+  assert.equal(h.requests.filter(r=>r.method==='POST').length,0);
+});
 
 test('empty history and scenario preview do not dispatch or spend inference', async()=>{
   const h=await harness({ready:false});

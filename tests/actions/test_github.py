@@ -12,10 +12,65 @@ import pytest
 
 from agentic_incident_remediation.actions.github import (
     WORKFLOW_SHA256,
+    ActionsConnectionError,
     ActionsError,
     GitHubActionsClient,
     review_evidence,
 )
+
+
+def test_transport_retries_only_reads_and_does_not_expose_exception_content():
+    requests = []
+
+    def timeout(request):
+        requests.append(request)
+        raise httpx.ConnectTimeout("private-token signed-url", request=request)
+
+    with httpx.Client(transport=httpx.MockTransport(timeout)) as http:
+        client = GitHubActionsClient(token="private-token", repository="example/demo", client=http)
+        for method, count in [("GET", 2), ("POST", 1)]:
+            requests.clear()
+            with pytest.raises(ActionsConnectionError, match=r"GitHub API.*timed out") as error:
+                client.request(method, "/repos/example/demo")
+            assert len(requests) == count
+            assert "private-token" not in str(error.value)
+            assert "signed-url" not in str(error.value)
+
+
+@pytest.mark.parametrize("failed_artifact", [1, 2])
+def test_transient_storage_failure_keeps_independently_verified_proposal(
+    api, github, monkeypatch, failed_artifact
+):
+    api.stage = "completed"
+
+    def handler(request):
+        if request.url.host != "api.github.com" and request.url.path.endswith(str(failed_artifact)):
+            assert "authorization" not in request.headers
+            raise httpx.ReadTimeout("signed storage URL must not leak", request=request)
+        return api.handler(request)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as http:
+        monkeypatch.setattr(github, "_client", http)
+        review, receipt, notice = github.evidence(github.run(api.run_id), None, None)
+    assert (review is not None) == (failed_artifact == 2)
+    assert receipt is None  # Never promote a receipt without its matching proposal.
+    assert "GitHub artifact storage did not respond in time" in notice
+    assert "signed storage URL" not in notice
+
+
+def test_read_transport_recovers_on_second_attempt():
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        if len(requests) == 1:
+            raise httpx.ConnectTimeout("temporary", request=request)
+        return httpx.Response(200, json={"ok": True})
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as http:
+        client = GitHubActionsClient(token="test", repository="example/demo", client=http)
+        assert client.get("/repos/example/demo") == {"ok": True}
+    assert len(requests) == 2
 
 
 @pytest.mark.parametrize(

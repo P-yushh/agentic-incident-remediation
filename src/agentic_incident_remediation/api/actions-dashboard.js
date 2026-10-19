@@ -1,7 +1,7 @@
 'use strict';
 
 const byId = (id) => document.getElementById(id);
-const view = { runs: new Map(), scenarios: new Map(), diffs: new Map(), diffLoading: new Set(), section: 'incidents', selected: null, csrf: '', ready: false, ollamaEnabled: false, ollamaSupported: false, readinessMessage: 'Checking availability…', busy: false, timer: null, failures: 0 };
+const view = { runs: new Map(), scenarios: new Map(), diffs: new Map(), diffLoading: new Set(), section: 'incidents', selected: null, csrf: '', ready: false, ollamaEnabled: false, ollamaSupported: false, readinessMessage: 'Checking availability…', busy: false, timer: null, failures: 0, evidenceChecks: 0 };
 const finished = new Set(['completed', 'failed', 'cancelled', 'rejected']);
 const simulator = byId('simulator');
 const labels = {
@@ -247,6 +247,8 @@ function render(run) {
   const rejectionDetail = rejected
     ? `${run.review_rejection.reviewer} rejected this proposal in GitHub. Publication was stopped at human review; no remediation PR was created by this run. This is a review decision, not a technical failure.` : '';
   byId('status').textContent = labels[run.stage];
+  const checked = run.last_synced_at ? `Last GitHub check: ${new Date(run.last_synced_at).toLocaleString()}.` : 'No recent GitHub check recorded.';
+  byId('sync-status').textContent = run.sync_error ? `Cached status. ${checked} ${run.sync_error}` : checked;
   byId('status').className = 'air-label ' + (run.stage === 'completed' ? 'good' : ['failed', 'cancelled', 'dispatch_unknown', 'rejected'].includes(run.stage) ? 'red' : 'warn');
   byId('run-label').textContent = incidentAlias(run);
   byId('execution').textContent = spec?.title || 'Scenario not yet verified';
@@ -261,7 +263,7 @@ function render(run) {
   byId('rejection-detail').textContent = rejectionDetail;
   setLink('rejection-link', rejected ? run.run_url : null);
   byId('workspace-message').textContent = run.notice || (run.stage === 'awaiting_review'
-    ? 'Inspect the verified proposal, then approve or reject in GitHub. “Approve and deploy” authorizes PR creation only.'
+    ? run.review ? 'Inspect the verified proposal, then approve or reject in GitHub. “Approve and deploy” authorizes PR creation only.' : 'GitHub is waiting for human review, but proposal evidence is not yet verified here. Inspect the original artifact in GitHub before approving.'
     : rejected ? 'Review complete · proposal retained for inspection · publication not authorized.'
     : 'Progress is polled from GitHub jobs, not streamed from individual agents.');
   const phases = ['queued', 'preparing', 'awaiting_review', 'publishing', 'completed'];
@@ -286,7 +288,9 @@ function render(run) {
   byId('validation-status').className = 'air-label ' + (review ? 'good' : 'warn');
   byId('proposal-summary').textContent = review
     ? `${review.validation_tool === 'terraform_validate' ? 'Terraform configuration' : 'Deployment configuration'} validated with ${review.validation_tool}. Review the highlighted changes before approving publication.`
-    : 'Preparation must finish and its artifact must pass verification before a proposal is shown.';
+    : ['awaiting_review', 'publishing', 'completed', 'rejected'].includes(run.stage)
+      ? 'GitHub has finished preparation, but the proposal file has not been loaded and verified. Read-only evidence checks will continue unless the evidence is invalid or expired.'
+      : 'Preparation must finish and its artifact must pass verification before a proposal is shown.';
   byId('validation-details').replaceChildren(...(review ? [textElement('span', `✓ ${review.validation_tool} passed`), textElement('span', '✓ Artifact checksum verified'), textElement('span', '◇ Not applied')] : []));
   byId('validation-counts').textContent = review
     ? review.validation_attempts != null && review.validation_passes != null
@@ -316,8 +320,10 @@ function render(run) {
   byId('verdict-status').textContent = rejected ? 'Rejected' : run.receipt ? 'Approved · PR created' : run.stage === 'awaiting_review' ? 'Awaiting review' : run.stage === 'failed' ? 'Failed' : run.stage === 'cancelled' ? 'Cancelled' : run.stage === 'completed' ? 'Publication unverified' : 'WIP';
   byId('verdict-status').className = 'air-label ' + (run.receipt ? 'good' : ['failed', 'rejected'].includes(run.stage) ? 'red' : 'warn');
   byId('decision-title').textContent = run.stage === 'failed' ? (run.failure_origin === 'local' ? 'Local generation or handoff failed' : run.run_id ? 'Execution failed on GitHub' : 'Could not start GitHub execution') : rejected ? 'Proposal rejected · publication blocked' : run.receipt ? 'Human-reviewed PR created' : run.stage === 'awaiting_review' ? 'Ready for human review' : 'Human-reviewed changes only';
+  if (run.stage === 'awaiting_review' && !review) byId('decision-title').textContent = 'Proposal evidence unavailable';
   byId('decision-note').textContent = run.stage === 'failed' ? (run.failure_reason || run.notice || 'GitHub execution did not complete. Inspect the failed job; the underlying cause is unavailable.') : rejected ? 'The safety gate worked: nothing was published, merged or deployed by this run.' : run.receipt ? 'Review the PR independently before any merge or deployment.' : 'Approval and rejection take place in GitHub, not in this dashboard.';
   byId('github-review').textContent = run.stage === 'awaiting_review' ? 'Review in GitHub ↗' : 'Open GitHub run ↗';
+  if (run.stage === 'awaiting_review' && !review) byId('github-review').textContent = 'Inspect GitHub evidence ↗';
   byId('publication').hidden = !run.receipt && run.stage !== 'completed';
   byId('publication-title').textContent = run.receipt ? `Remediation PR #${run.receipt.pull_request.number}` : 'Publication evidence unavailable';
   byId('result').textContent = run.receipt
@@ -336,20 +342,37 @@ function remember(run) {
   renderQueue(); if (view.selected === run.id) render(run);
 }
 function select(identifier) {
-  clearTimeout(view.timer); view.selected = identifier; view.failures = 0;
+  clearTimeout(view.timer); view.selected = identifier; view.failures = 0; view.evidenceChecks = 0;
   byId('execution-error').textContent = ''; renderQueue(); render(view.runs.get(identifier)); poll(true);
+}
+function needsEvidence(run) {
+  if (!run?.run_id || ['invalid', 'expired'].includes(run.evidence_status)) return false;
+  if (run.stage === 'completed') return !run.review || !run.receipt;
+  if (['awaiting_review', 'publishing', 'rejected'].includes(run.stage)) return !run.review;
+  return run.evidence_status === 'unavailable';
 }
 async function poll(manual = false) {
   clearTimeout(view.timer); const identifier = view.selected; if (!identifier) return;
+  if (manual) view.evidenceChecks = 0;
   try {
-    const run = await request(`/api/actions/runs/${identifier}`); remember(run); view.failures = 0;
-    if (view.selected === identifier) byId('execution-error').textContent = '';
+    const run = await request(`/api/actions/runs/${identifier}`); remember(run);
+    if (view.selected !== identifier) return;
+    view.failures = run.sync_error || run.evidence_status === 'unavailable' ? view.failures + 1 : 0;
+    byId('execution-error').textContent = run.sync_error || '';
   } catch (error) {
-    view.failures += 1; if (view.selected === identifier) byId('execution-error').textContent = error.message;
+    if (view.selected !== identifier) return;
+    view.failures += 1;
+    byId('execution-error').textContent = `${error.message} Displayed status is cached. Only read-only updates will be checked again.`;
+    byId('sync-status').textContent = 'Cached status. The latest GitHub check did not complete.';
   }
   const run = view.runs.get(identifier);
-  if (view.selected === identifier && (run?.run_id || run?.stage === 'local_generating' || run?.stage === 'dispatching') && !finished.has(run.stage)) {
-    view.timer = setTimeout(poll, Math.min(60000, 5000 * (2 ** Math.min(view.failures, 4))));
+  const active = run && !finished.has(run.stage) && (run.run_id || run.stage === 'local_generating' || run.stage === 'dispatching');
+  const evidencePending = needsEvidence(run) || !!run?.sync_error || view.failures > 0;
+  if (!active && evidencePending) view.evidenceChecks += 1;
+  if (view.selected === identifier && (active || (evidencePending && view.evidenceChecks <= 10))) {
+    view.timer = setTimeout(() => poll(false), Math.min(60000, 5000 * (2 ** Math.min(view.failures, 4))));
+  } else if (evidencePending && view.evidenceChecks > 10) {
+    byId('execution-error').textContent = 'Automatic read-only checks paused after repeated attempts. Select Refresh to check again. No workflow was restarted.';
   }
 }
 byId('open-simulator').addEventListener('click', () => {

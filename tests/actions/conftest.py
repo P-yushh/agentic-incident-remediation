@@ -29,7 +29,10 @@ def make_zip(files):
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for name, content in files.items():
-            archive.writestr(name, content)
+            # Metadata and download must hash identically across clock boundaries.
+            entry = zipfile.ZipInfo(name, date_time=(2026, 1, 1, 0, 0, 0))
+            entry.compress_type = zipfile.ZIP_DEFLATED
+            archive.writestr(entry, content)
     return buffer.getvalue()
 
 

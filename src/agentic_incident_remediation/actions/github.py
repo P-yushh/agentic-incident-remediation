@@ -42,13 +42,28 @@ class DispatchUnknown(ActionsError):
     """The server must never automatically retry a possibly accepted dispatch."""
 
 
+class ActionsConnectionError(ActionsError):
+    """A safe network diagnosis, distinct from missing or invalid evidence."""
+
+
+def connection_message(error: httpx.HTTPError, *, artifact: bool = False) -> str:
+    target = "GitHub artifact storage" if artifact else "GitHub API"
+    if isinstance(error, httpx.ConnectTimeout):
+        return f"Connection to {target} timed out. Cached information may be out of date."
+    if isinstance(error, httpx.ReadTimeout):
+        return f"{target} did not respond in time. Cached information may be out of date."
+    return f"Connection to {target} was interrupted. Cached information may be out of date."
+
+
 class GitHubActionsClient:
     def __init__(self, *, token: str, repository: str, client: httpx.Client | None = None) -> None:
         if not token.strip() or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
             raise ValueError("a GitHub credential and owner/repository are required")
         self.repository = repository
         self.root = f"/repos/{repository}"
-        self._client = client or httpx.Client(timeout=20, follow_redirects=False)
+        self._client = client or httpx.Client(
+            timeout=httpx.Timeout(15, connect=5, pool=5), follow_redirects=False
+        )
         self._owns_client = client is None
         self._verified_shas: dict[str, str] = {}
         self._headers = {
@@ -63,16 +78,21 @@ class GitHubActionsClient:
             self._client.close()
 
     def request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
-        try:
-            return self._client.request(
-                method,
-                "https://api.github.com" + path,
-                headers=self._headers,
-                follow_redirects=False,
-                **kwargs,
-            )
-        except httpx.HTTPError:
-            raise ActionsError("GitHub could not be reached; no automatic retry was made") from None
+        # Only reads can be repeated. Dispatch, cancellation and publication never retry here.
+        attempts = 2 if method == "GET" else 1
+        for attempt in range(attempts):
+            try:
+                return self._client.request(
+                    method,
+                    "https://api.github.com" + path,
+                    headers=self._headers,
+                    follow_redirects=False,
+                    **kwargs,
+                )
+            except httpx.HTTPError as error:
+                if attempt + 1 == attempts:
+                    raise ActionsConnectionError(connection_message(error)) from None
+        raise AssertionError("unreachable request state")
 
     def get(self, path: str) -> Any:
         response = self.request("GET", path)
@@ -294,8 +314,8 @@ class GitHubActionsClient:
                         raise ActionsError("review archive exceeds the size limit")
             finally:
                 download.close()
-        except httpx.HTTPError:
-            raise ActionsError("artifact download interrupted; no mutation was retried") from None
+        except httpx.HTTPError as error:
+            raise ActionsConnectionError(connection_message(error, artifact=True)) from None
         raw = bytes(chunks)
         if artifact.get("digest") != "sha256:" + hashlib.sha256(raw).hexdigest():
             raise ActionsError("GitHub artifact digest verification failed")
@@ -328,6 +348,8 @@ class GitHubActionsClient:
             "artifacts"
         ]
         notice = None
+        # A receipt must not delay loading an independently verified proposal.
+        artifacts.sort(key=lambda item: not str(item.get("name", "")).startswith("review-bundle"))
         for artifact in artifacts:
             name = artifact.get("name")
             if name not in {f"review-bundle-{identifier}-1", f"publication-receipt-{identifier}"}:
@@ -340,7 +362,11 @@ class GitHubActionsClient:
             if name.startswith("review-bundle") and (
                 review is None or review.validation_attempts is None
             ):
-                refreshed = review_evidence(self.archive(artifact), run, self.repository)
+                try:
+                    refreshed = review_evidence(self.archive(artifact), run, self.repository)
+                except ActionsConnectionError as error:
+                    notice = str(error) + " Proposal download will be checked again."
+                    continue
                 statistics = {"validation_attempts", "validation_passes", "retry_count"}
                 if review is not None and refreshed.model_dump(
                     exclude=statistics
@@ -348,9 +374,13 @@ class GitHubActionsClient:
                     raise ActionsError("review statistics do not match the cached proposal")
                 review = refreshed
             elif name.startswith("publication-receipt") and receipt is None:
-                receipt = PublicationReceipt.model_validate_json(
-                    self.archive(artifact)["publication.json"]
-                )
+                try:
+                    receipt = PublicationReceipt.model_validate_json(
+                        self.archive(artifact)["publication.json"]
+                    )
+                except ActionsConnectionError as error:
+                    notice = str(error) + " Publication receipt will be checked again."
+                    continue
                 record = receipt.pull_request
                 if (
                     record.repository != self.repository
@@ -360,9 +390,15 @@ class GitHubActionsClient:
                     raise ActionsError(
                         "publication receipt points to an unexpected repository or branch"
                     )
-        if receipt is not None and (
-            review is None
-            or (
+        if receipt is not None and review is None:
+            receipt = None
+            notice = (
+                notice or "The matching proposal must be verified before publication is confirmed."
+            )
+        if (
+            receipt is not None
+            and review is not None
+            and (
                 receipt.execution_id != review.execution_id
                 or receipt.approval_id != review.approval_id
                 or receipt.artifact_sha256 != review.artifact_sha256

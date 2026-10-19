@@ -8,6 +8,7 @@ from typing import Any
 from uuid import UUID
 
 from agentic_incident_remediation.actions.github import (
+    ActionsConnectionError,
     ActionsError,
     DispatchUnknown,
     GitHubActionsClient,
@@ -307,11 +308,20 @@ class ActionsService:
             record = self.store.get(identifier)
             if record.run_id is None or monotonic() - self._checked.get(identifier, -100) < 5:
                 return record
-            run = self.github.run(record.run_id, expected_sha=record.head_sha)
+            try:
+                run = self.github.run(record.run_id, expected_sha=record.head_sha)
+                jobs = self.github.jobs(record.run_id)
+            except ActionsConnectionError as error:
+                # Keep the last confirmed stage and evidence, but label them as cached.
+                record = record.model_copy(update={"sync_error": str(error)})
+                self.store.save(record)
+                self._checked[identifier] = monotonic()
+                return record
+            assert record.run_id is not None
+            checked_at = utc_now()
             inferred_scenario = record.scenario or (
                 DemoScenario.OOM if run.get("_legacy_oom_only") is True else None
             )
-            jobs = self.github.jobs(record.run_id)
             completed = run.get("status") == "completed"
             conclusion = run.get("conclusion")
             prepare = next((job for job in jobs if job["name"] == "prepare"), {})
@@ -335,8 +345,18 @@ class ActionsService:
                 if step.get("status") == "in_progress"
             )
             review, receipt, notice = record.review, record.receipt, None
+            evidence_status = "pending"
             try:
                 review, receipt, notice = self.github.evidence(run, review, receipt)
+                evidence_status = (
+                    "expired"
+                    if notice and "expired" in notice
+                    else "unavailable"
+                    if notice
+                    else "verified"
+                    if review is not None
+                    else "pending"
+                )
                 if (
                     review is not None
                     and record.scenario is not None
@@ -351,9 +371,13 @@ class ActionsService:
                 ):
                     review, receipt = None, None
                     raise ValueError("evidence generation mode differs from the dispatch intent")
+            except ActionsConnectionError as error:
+                notice = str(error) + " Only read-only status and evidence checks will be repeated."
+                evidence_status = "unavailable"
             except Exception:
                 # Untrusted metadata/ZIP/model content must not leak URLs or tokens via exceptions.
                 notice = "Evidence unavailable or failed verification. Inspect the GitHub run."
+                evidence_status = "invalid"
             rejection = None
             if (
                 completed
@@ -411,6 +435,9 @@ class ActionsService:
                     if review is not None
                     else record.generation_mode,
                     "notice": notice,
+                    "last_synced_at": checked_at,
+                    "sync_error": None,
+                    "evidence_status": evidence_status,
                     "review_rejection": rejection,
                     "failure_code": diagnostic_code,
                     "completed_phases": tuple(completed_phases),
