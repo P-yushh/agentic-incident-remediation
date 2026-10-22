@@ -26,6 +26,74 @@ demo = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(demo)
 
 
+@pytest.mark.parametrize("code", ["provider_rate_limit", "provider_auth", "unknown"])
+def test_main_emits_only_a_sanitized_diagnostic_annotation(monkeypatch, capsys, tmp_path, code):
+    import logging
+
+    from agentic_incident_remediation.llm.diagnostics import ModelFailure, ReportedModelFailure
+
+    monkeypatch.setattr("sys.argv", ["reviewed_live_demo", "prepare", "--bundle", str(tmp_path)])
+    monkeypatch.setattr(demo, "context", lambda: {})
+    error = (
+        RuntimeError("private-token and sensitive model response")
+        if code == "unknown"
+        else ReportedModelFailure(ModelFailure(code=code))
+    )
+    monkeypatch.setattr(demo, "prepare", Mock(side_effect=error))
+    try:
+        assert demo.main() == 1
+    finally:
+        logging.disable(logging.NOTSET)
+    output = capsys.readouterr().out
+    assert 'AIR_FAILURE_V1 {"code":"' + code + '"}' in output
+    assert "private-token" not in output and "sensitive" not in output
+
+
+def test_prepare_preserves_safe_gateway_failure_even_when_workflow_swallows_exception(
+    monkeypatch, tmp_path
+):
+    from contextlib import suppress
+
+    from agentic_incident_remediation.llm import ModelGatewayError
+    from agentic_incident_remediation.llm.diagnostics import ReportedModelFailure
+
+    for name in ("GITHUB_TOKEN", "GH_TOKEN", "HF_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "synthetic-private-key")
+    redis = MagicMock()
+    redis.__enter__.return_value = redis
+    redis.dbsize.return_value = 0
+    monkeypatch.setattr(demo.Redis, "from_url", lambda *args, **kwargs: redis)
+    monkeypatch.setattr(demo, "create_redis_checkpointer", lambda _: None)
+    monkeypatch.setattr(demo, "DurableApprovalWorkflow", Mock())
+
+    def stopped_workflow(workflow, budget, *args):
+        with suppress(ModelGatewayError):  # Graph normally converts this into failed state.
+            budget.generate_structured(
+                system_prompt="s", user_prompt="u", response_model=RemediationPlan
+            )
+        raise ValueError("execution did not reach review")
+
+    monkeypatch.setattr(demo, "prepare_review", stopped_workflow)
+    with httpx.Client(
+        base_url="https://generativelanguage.googleapis.com/v1beta/",
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(429, json={"error": "private body"})
+        ),
+    ) as http:
+        model = GeminiStructuredModel(
+            api_key="synthetic-private-key",
+            model="gemini-3.8-flash",
+            max_output_tokens=1200,
+            client=http,
+        )
+        monkeypatch.setattr(demo.GeminiStructuredModel, "from_settings", lambda _: model)
+        with pytest.raises(ReportedModelFailure) as error:
+            demo.prepare(tmp_path / "bundle", {"repository": "example/demo"})
+    assert error.value.diagnostic.code == "provider_rate_limit"
+    assert "private" not in str(error.value)
+
+
 @pytest.fixture
 def github_context(monkeypatch, tmp_path):
     event = tmp_path / "event.json"
@@ -232,7 +300,8 @@ def test_manual_workflow_scopes_credentials_artifacts_and_human_gate():
     assert "github.run_attempt == 1" in text
     assert "github.event.repository.private == false" in text
     assert "github.ref == 'refs/heads/main'" in text
-    assert text.count("${{ secrets.GEMINI_API_KEY }}") == 1
+    assert text.count("secrets.GEMINI_API_KEY") == 1
+    assert "inputs.generation_mode != 'ollama_local' && secrets.GEMINI_API_KEY || ''" in text
     assert "environment: remediation-demo-review" in text
     assert "needs: prepare" in text
     assert "${{ needs.prepare.outputs.bundle_sha256 }}" in text
@@ -242,6 +311,77 @@ def test_manual_workflow_scopes_credentials_artifacts_and_human_gate():
     assert "pull-requests: write" in publish_text
     assert "secrets.GEMINI_API_KEY" not in publish_text
     assert text.count("persist-credentials: false") == 2
+
+
+@pytest.mark.parametrize("scenario", list(DemoScenario))
+def test_local_handoff_uses_exact_output_real_graph_and_zero_remote_inference(
+    monkeypatch, tmp_path, scenario
+):
+    from agentic_incident_remediation.generator.node import GeneratorNode
+    from agentic_incident_remediation.llm.local_handoff import LocalProposal
+    from agentic_incident_remediation.models import AgentState, Incident, WorkflowStatus
+    from agentic_incident_remediation.planner.node import PlannerNode
+    from agentic_incident_remediation.review_scenarios import SCENARIOS
+
+    state = AgentState(
+        incident=Incident.model_validate(SCENARIOS[scenario].incident()),
+        status=WorkflowStatus.PLANNING,
+    )
+    fixture = FixtureStructuredModel()
+    state = state.model_copy(update=PlannerNode(fixture)(state))
+    state = state.model_copy(update=GeneratorNode(fixture)(state))
+    artifact = ArtifactDraft.model_validate(
+        state.artifacts[0].model_dump(include={"kind", "path", "content", "change_summary"})
+    )
+    local = LocalProposal(
+        scenario=scenario, incident_id=state.incident.id, plan=state.plan, artifact=artifact
+    )
+    for key in ("GITHUB_TOKEN", "GH_TOKEN", "HF_TOKEN", "GEMINI_API_KEY"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("AIR_GENERATION_MODE", "ollama_local")
+    monkeypatch.setenv("AIR_LOCAL_PROPOSAL", local.wire())
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "output"))
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "summary"))
+    redis = MagicMock()
+    redis.__enter__.return_value = redis
+    redis.dbsize.return_value = 0
+    monkeypatch.setattr(demo.Redis, "from_url", lambda *a, **kw: redis)
+    monkeypatch.setattr(
+        demo,
+        "create_redis_checkpointer",
+        lambda _: InMemorySaver(serde=create_checkpoint_serializer()),
+    )
+    monkeypatch.setattr(demo, "DockerSandboxRunner", FixtureSandboxRunner)
+    monkeypatch.setattr(
+        demo.GeminiStructuredModel,
+        "from_settings",
+        Mock(side_effect=AssertionError("hosted inference forbidden")),
+    )
+    monkeypatch.setattr(
+        demo,
+        "snapshot_redis",
+        lambda directory: (directory / "dump.rdb").write_bytes(b"fixture checkpoint"),
+    )
+    directory = tmp_path / "bundle"
+    provenance = {
+        "repository": "example/demo",
+        "scenario": scenario.value,
+        "sha": "a" * 40,
+        "run_id": "123",
+        "run_attempt": "1",
+    }
+    demo.prepare(directory, provenance)
+    manifest = json.loads((directory / "manifest.json").read_text())
+    restored = AgentState.model_validate(manifest["state"])
+    assert restored.incident.id == local.incident_id
+    assert restored.incident.occurred_at == local.occurred_at
+    assert restored.artifacts[0].content == local.artifact.content
+    assert restored.status is WorkflowStatus.AWAITING_APPROVAL
+    assert restored.pull_request is None
+    assert manifest["generation_mode"] == "ollama_local"
+    assert manifest["remote_inference_calls"] == 0
+    assert "Remote inference calls: 0" in (tmp_path / "summary").read_text()
+    demo.GeminiStructuredModel.from_settings.assert_not_called()
 
 
 @pytest.mark.parametrize("scenario", list(DemoScenario))

@@ -12,7 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from agentic_incident_remediation.actions.app import create_actions_app
-from agentic_incident_remediation.actions.github import ActionsError
+from agentic_incident_remediation.actions.github import ActionsConnectionError, ActionsError
 from agentic_incident_remediation.actions.models import RunRecord
 from agentic_incident_remediation.actions.service import ActionsService
 from agentic_incident_remediation.actions.store import RunStore
@@ -25,6 +25,59 @@ def start(browser, identifier=None):
     )
 
 
+def test_cached_status_survives_connection_failure_then_recovers(
+    browser, service, github, api, monkeypatch
+):
+    identifier = start(browser).json()["id"]
+    waiting = browser.get(f"/api/actions/runs/{identifier}").json()
+    original = github.run
+    monkeypatch.setattr(
+        github,
+        "run",
+        Mock(side_effect=ActionsConnectionError("Connection to GitHub API timed out.")),
+    )
+    service._checked.clear()
+    cached = browser.get(f"/api/actions/runs/{identifier}").json()
+    assert cached["stage"] == "awaiting_review"
+    assert cached["review"] == waiting["review"]
+    assert cached["last_synced_at"] == waiting["last_synced_at"]
+    assert "timed out" in cached["sync_error"]
+
+    monkeypatch.setattr(github, "run", original)
+    api.stage = "completed"
+    service._checked.clear()
+    recovered = browser.get(f"/api/actions/runs/{identifier}").json()
+    assert recovered["stage"] == "completed"
+    assert recovered["sync_error"] is None
+    assert recovered["review"] and recovered["receipt"]
+    assert recovered["evidence_status"] == "verified"
+    assert len([r for r in api.requests if r.method == "POST"]) == 1
+
+
+def test_approval_status_updates_even_when_evidence_download_is_unavailable(
+    browser, service, github, api, monkeypatch
+):
+    identifier = start(browser).json()["id"]
+    original = github.evidence
+    api.stage = "completed"
+    monkeypatch.setattr(
+        github,
+        "evidence",
+        Mock(side_effect=ActionsConnectionError("GitHub API did not respond in time.")),
+    )
+    service._checked.clear()
+    completed = browser.get(f"/api/actions/runs/{identifier}").json()
+    assert completed["stage"] == "completed"
+    assert completed["evidence_status"] == "unavailable"
+    assert completed["receipt"] is None
+    assert "read-only" in completed["notice"]
+    monkeypatch.setattr(github, "evidence", original)
+    service._checked.clear()
+    recovered = browser.get(f"/api/actions/runs/{identifier}").json()
+    assert recovered["review"] and recovered["receipt"]
+    assert recovered["notice"] is None
+
+
 def test_start_progress_review_publication_and_saved_downloads(browser, service, api):
     assert browser.get("/api/actions/readiness").json()["ready"]
     assert browser.get("/api/runtime").json()["mode"] == "actions"
@@ -32,7 +85,7 @@ def test_start_progress_review_publication_and_saved_downloads(browser, service,
     assert "actions-dashboard.js" in browser.get("/").text
     assert "const terminal" not in browser.get("/").text  # Native controller is not loaded.
     script = browser.get("/actions-dashboard.js")
-    assert script.status_code == 200 and "live-consent" in script.text
+    assert script.status_code == 200 and "confirm_live_calls: true" in script.text
     identifier = start(browser).json()["id"]
     assert browser.get(f"/api/actions/runs/{identifier}/proposal").status_code == 404
     assert browser.get(f"/api/actions/runs/{identifier}/receipt").status_code == 404
@@ -88,18 +141,25 @@ def test_approved_workspace_assets_tabs_and_no_unsupported_controls(browser):
     assert scripts == [{"src": "/actions-dashboard.js", "defer": None}]
     buttons = [attrs for tag, attrs in parser.nodes if tag == "button"]
     assert not any(re.search(r"pause|resume|approve|reject", b.get("id", "")) for b in buttons)
-    consent = next(attrs for _, attrs in parser.nodes if attrs.get("id") == "live-consent")
-    assert "required" in consent and "checked" not in consent
+    assert 'id="live-consent"' not in html
+    assert 'id="runtime-mode"' not in html and 'id="connection-status"' not in html
+    assert "disabled>Simulate</button>" in html
+    assert 'title="Starts one simulation using up to two AI calls"' in html
     submit = next(attrs for _, attrs in parser.nodes if attrs.get("id") == "submit-incident")
     assert "disabled" in submit
     script = browser.get("/actions-dashboard.js").text
     # Every literal controller target must exist in the new shell.
     assert set(re.findall(r"byId\('([^']+)'\)", script)) <= set(ids)
     assert "innerHTML" not in script and "ArrowRight" in script
-    assert "No live metrics, pod logs, or cluster events were collected" in script
+    assert "No live cluster metrics, pod logs or events are collected" in html
+    assert 'id="theme-toggle"' in html and 'aria-label="Verdict"' in html
+    assert 'id="import-run-form"' not in html
     css = browser.get("/actions-dashboard.css")
     assert css.status_code == 200 and "text/css" in css.headers["content-type"]
     assert "--air-accent:#096b66" in css.text and "@media(max-width:600px)" in css.text
+    assert "@media(prefers-reduced-motion:reduce)" in css.text
+    assert ".air-step.active .air-step-circle { animation:workflow-pulse" in css.text
+    assert ".air-rejection h3 { color:var(--air-red)" in css.text
 
 
 def test_duplicate_dispatch_remains_idempotent_after_recreating_service(

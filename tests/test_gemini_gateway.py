@@ -199,6 +199,17 @@ def test_gemini_http_failures_do_not_retry_or_expose_secrets(status: int) -> Non
             generate(model)
     assert attempts == 1
     assert TEST_KEY not in "".join(traceback.format_exception(caught.value))
+    assert model.last_failure is not None
+    assert model.last_failure.code == (
+        "provider_rate_limit"
+        if status == 429
+        else "provider_auth"
+        if status in {401, 403}
+        else "provider_unavailable"
+        if status >= 500
+        else "provider_request"
+    )
+    assert TEST_KEY not in model.last_failure.model_dump_json()
 
 
 def test_gemini_transport_errors_are_sanitized_without_retry() -> None:

@@ -132,7 +132,7 @@ def test_legacy_oom_evidence_is_readable_and_not_used_for_new_dispatch(api, gith
         (
             "Fresh alert through live inference, Docker validation and pending Redis review",
             "failure",
-            "provider quota",
+            "quota exhaustion is not confirmed",
         ),
         ("anything", "timed_out", "time limit"),
     ],

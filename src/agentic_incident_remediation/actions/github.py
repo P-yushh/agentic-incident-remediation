@@ -11,7 +11,13 @@ from urllib.parse import urlparse
 
 import httpx
 
-from agentic_incident_remediation.actions.models import PublicationReceipt, ReviewEvidence
+from agentic_incident_remediation.actions.models import (
+    PublicationReceipt,
+    ReviewEvidence,
+    ReviewRejection,
+)
+from agentic_incident_remediation.llm.diagnostics import ModelFailure
+from agentic_incident_remediation.llm.local_handoff import LocalProposal
 from agentic_incident_remediation.models import AgentState
 from agentic_incident_remediation.review_scenarios import (
     SCENARIOS,
@@ -23,7 +29,8 @@ WORKFLOW = "reviewed-live-demo.yml"
 WORKFLOW_PATH = f".github/workflows/{WORKFLOW}"
 # Keep the historic OOM source readable. New dispatch requires the multi-scenario source.
 LEGACY_WORKFLOW_SHA256 = "52b354ad73239f51aed54816b2596fcd546721fe24bf2885b8f73d91a3c999c6"
-WORKFLOW_SHA256 = "65a9eb0e4b3baf11bb72e03ce45ea8b96a23abdeb7ac27499a73dc08a1e9feb1"
+PREVIOUS_WORKFLOW_SHA256 = "65a9eb0e4b3baf11bb72e03ce45ea8b96a23abdeb7ac27499a73dc08a1e9feb1"
+WORKFLOW_SHA256 = "e677f9dade6e30835b3302a23f8193689104f18a229c05dc381f4733311d1c46"
 MAX_ARCHIVE = 5_000_000
 
 
@@ -35,13 +42,28 @@ class DispatchUnknown(ActionsError):
     """The server must never automatically retry a possibly accepted dispatch."""
 
 
+class ActionsConnectionError(ActionsError):
+    """A safe network diagnosis, distinct from missing or invalid evidence."""
+
+
+def connection_message(error: httpx.HTTPError, *, artifact: bool = False) -> str:
+    target = "GitHub artifact storage" if artifact else "GitHub API"
+    if isinstance(error, httpx.ConnectTimeout):
+        return f"Connection to {target} timed out. Cached information may be out of date."
+    if isinstance(error, httpx.ReadTimeout):
+        return f"{target} did not respond in time. Cached information may be out of date."
+    return f"Connection to {target} was interrupted. Cached information may be out of date."
+
+
 class GitHubActionsClient:
     def __init__(self, *, token: str, repository: str, client: httpx.Client | None = None) -> None:
         if not token.strip() or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
             raise ValueError("a GitHub credential and owner/repository are required")
         self.repository = repository
         self.root = f"/repos/{repository}"
-        self._client = client or httpx.Client(timeout=20, follow_redirects=False)
+        self._client = client or httpx.Client(
+            timeout=httpx.Timeout(15, connect=5, pool=5), follow_redirects=False
+        )
         self._owns_client = client is None
         self._verified_shas: dict[str, str] = {}
         self._headers = {
@@ -56,16 +78,21 @@ class GitHubActionsClient:
             self._client.close()
 
     def request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
-        try:
-            return self._client.request(
-                method,
-                "https://api.github.com" + path,
-                headers=self._headers,
-                follow_redirects=False,
-                **kwargs,
-            )
-        except httpx.HTTPError:
-            raise ActionsError("GitHub could not be reached; no automatic retry was made") from None
+        # Only reads can be repeated. Dispatch, cancellation and publication never retry here.
+        attempts = 2 if method == "GET" else 1
+        for attempt in range(attempts):
+            try:
+                return self._client.request(
+                    method,
+                    "https://api.github.com" + path,
+                    headers=self._headers,
+                    follow_redirects=False,
+                    **kwargs,
+                )
+            except httpx.HTTPError as error:
+                if attempt + 1 == attempts:
+                    raise ActionsConnectionError(connection_message(error)) from None
+        raise AssertionError("unreachable request state")
 
     def get(self, path: str) -> Any:
         response = self.request("GET", path)
@@ -104,12 +131,14 @@ class GitHubActionsClient:
             "repository": self.repository,
             "head_sha": sha,
             "maximum_model_calls": 2,
+            "ollama_supported": self._verified_shas[sha] == WORKFLOW_SHA256,
             "message": "Ready for an explicitly confirmed synthetic run",
         }
 
     def verify_source(self, sha: str, *, for_dispatch: bool = False) -> None:
         if sha in self._verified_shas and (
-            not for_dispatch or self._verified_shas[sha] == WORKFLOW_SHA256
+            not for_dispatch
+            or self._verified_shas[sha] in {WORKFLOW_SHA256, PREVIOUS_WORKFLOW_SHA256}
         ):
             return
         source = self.get(f"{self.root}/contents/{WORKFLOW_PATH}?ref={sha}")
@@ -118,23 +147,30 @@ class GitHubActionsClient:
         except (KeyError, ValueError):
             raise ActionsError("workflow source could not be verified") from None
         digest = hashlib.sha256(content).hexdigest()
-        if digest not in {WORKFLOW_SHA256, LEGACY_WORKFLOW_SHA256}:
+        if digest not in {WORKFLOW_SHA256, PREVIOUS_WORKFLOW_SHA256, LEGACY_WORKFLOW_SHA256}:
             raise ActionsError("workflow has changed; review its budget and safety boundary first")
-        if for_dispatch and digest != WORKFLOW_SHA256:
+        if for_dispatch and digest not in {WORKFLOW_SHA256, PREVIOUS_WORKFLOW_SHA256}:
             raise ActionsError(
                 "The multi-scenario workflow is not published to main yet. "
                 "You can preview scenarios and inspect saved runs without inference."
             )
         self._verified_shas[sha] = digest
 
-    def dispatch(self, scenario: DemoScenario = DemoScenario.OOM) -> int:
+    def dispatch(
+        self, scenario: DemoScenario = DemoScenario.OOM, *, local: LocalProposal | None = None
+    ) -> int:
+        inputs: dict[str, Any] = {"confirm_live_demo": True, "scenario": scenario.value}
+        if local is not None:
+            if local.scenario != scenario:
+                raise ActionsError("local proposal scenario differs from dispatch")
+            inputs.update(generation_mode="ollama_local", local_proposal=local.wire())
         try:
             response = self.request(
                 "POST",
                 f"{self.root}/actions/workflows/{WORKFLOW}/dispatches",
                 json={
                     "ref": "main",
-                    "inputs": {"confirm_live_demo": True, "scenario": scenario.value},
+                    "inputs": inputs,
                     "return_run_details": True,
                 },
             )
@@ -185,6 +221,65 @@ class GitHubActionsClient:
         if response.status_code != 202:
             raise ActionsError("cancellation was not confirmed; inspect GitHub before retrying")
 
+    def failure_diagnostic(self, job: dict[str, Any]) -> ModelFailure | None:
+        """Read only a typed marker from the failed job's bound check annotations."""
+        url = job.get("check_run_url", "")
+        prefix = f"https://api.github.com{self.root}/check-runs/"
+        if (
+            not isinstance(url, str)
+            or not url.startswith(prefix)
+            or not re.fullmatch(r"[1-9][0-9]*", url[len(prefix) :])
+        ):
+            return None
+        annotations = self.get(
+            url.removeprefix("https://api.github.com") + "/annotations?per_page=100"
+        )
+        if not isinstance(annotations, list):
+            raise ActionsError("GitHub failure diagnostic could not be verified")
+        markers = set()
+        for item in annotations:
+            if not isinstance(item, dict) or item.get("title") != "Remediation diagnostic":
+                continue
+            message = item.get("message")
+            if (
+                not isinstance(message, str)
+                or not message.startswith("AIR_FAILURE_V1 ")
+                or len(message) > 150
+            ):
+                continue
+            try:
+                markers.add(
+                    ModelFailure.model_validate_json(message.removeprefix("AIR_FAILURE_V1 ")).code
+                )
+            except ValueError:
+                continue
+        return ModelFailure(code=markers.pop()) if len(markers) == 1 else None
+
+    def review_rejection(self, identifier: int) -> ReviewRejection | None:
+        """Read the native review decision; never infer rejection from a failed job."""
+        history = self.get(f"{self.root}/actions/runs/{identifier}/approvals")
+        if not isinstance(history, list):
+            raise ActionsError("GitHub review history could not be verified")
+        decisions = []
+        for item in history:
+            if not isinstance(item, dict) or not isinstance(item.get("environments"), list):
+                raise ActionsError("GitHub review history could not be verified")
+            if any(
+                isinstance(env, dict) and env.get("name") == "remediation-demo-review"
+                for env in item["environments"]
+            ):
+                decisions.append(item)
+        # Conflicting decisions must not turn a technical publication error into a rejection.
+        if not decisions or any(item.get("state") != "rejected" for item in decisions):
+            return None
+        user = decisions[0].get("user")
+        if not isinstance(user, dict):
+            raise ActionsError("GitHub review history could not be verified")
+        try:
+            return ReviewRejection(reviewer=user.get("login"))
+        except ValueError:
+            raise ActionsError("GitHub reviewer identity could not be verified") from None
+
     def archive(self, artifact: dict[str, Any]) -> dict[str, bytes]:
         """Verify archive integrity; never execute/extract Redis checkpoints to disk."""
 
@@ -219,8 +314,8 @@ class GitHubActionsClient:
                         raise ActionsError("review archive exceeds the size limit")
             finally:
                 download.close()
-        except httpx.HTTPError:
-            raise ActionsError("artifact download interrupted; no mutation was retried") from None
+        except httpx.HTTPError as error:
+            raise ActionsConnectionError(connection_message(error, artifact=True)) from None
         raw = bytes(chunks)
         if artifact.get("digest") != "sha256:" + hashlib.sha256(raw).hexdigest():
             raise ActionsError("GitHub artifact digest verification failed")
@@ -253,6 +348,8 @@ class GitHubActionsClient:
             "artifacts"
         ]
         notice = None
+        # A receipt must not delay loading an independently verified proposal.
+        artifacts.sort(key=lambda item: not str(item.get("name", "")).startswith("review-bundle"))
         for artifact in artifacts:
             name = artifact.get("name")
             if name not in {f"review-bundle-{identifier}-1", f"publication-receipt-{identifier}"}:
@@ -262,12 +359,28 @@ class GitHubActionsClient:
             if artifact.get("expired"):
                 notice = "Remote evidence expired; previously verified local evidence is retained."
                 continue
-            if name.startswith("review-bundle") and review is None:
-                review = review_evidence(self.archive(artifact), run, self.repository)
+            if name.startswith("review-bundle") and (
+                review is None or review.validation_attempts is None
+            ):
+                try:
+                    refreshed = review_evidence(self.archive(artifact), run, self.repository)
+                except ActionsConnectionError as error:
+                    notice = str(error) + " Proposal download will be checked again."
+                    continue
+                statistics = {"validation_attempts", "validation_passes", "retry_count"}
+                if review is not None and refreshed.model_dump(
+                    exclude=statistics
+                ) != review.model_dump(exclude=statistics):
+                    raise ActionsError("review statistics do not match the cached proposal")
+                review = refreshed
             elif name.startswith("publication-receipt") and receipt is None:
-                receipt = PublicationReceipt.model_validate_json(
-                    self.archive(artifact)["publication.json"]
-                )
+                try:
+                    receipt = PublicationReceipt.model_validate_json(
+                        self.archive(artifact)["publication.json"]
+                    )
+                except ActionsConnectionError as error:
+                    notice = str(error) + " Publication receipt will be checked again."
+                    continue
                 record = receipt.pull_request
                 if (
                     record.repository != self.repository
@@ -277,9 +390,15 @@ class GitHubActionsClient:
                     raise ActionsError(
                         "publication receipt points to an unexpected repository or branch"
                     )
-        if receipt is not None and (
-            review is None
-            or (
+        if receipt is not None and review is None:
+            receipt = None
+            notice = (
+                notice or "The matching proposal must be verified before publication is confirmed."
+            )
+        if (
+            receipt is not None
+            and review is not None
+            and (
                 receipt.execution_id != review.execution_id
                 or receipt.approval_id != review.approval_id
                 or receipt.artifact_sha256 != review.artifact_sha256
@@ -310,6 +429,15 @@ def review_evidence(
         raise ActionsError("review manifest provenance or model budget is invalid")
     state = AgentState.model_validate(payload["state"])
     scenario = scenario_for_manifest(payload)
+    generation_mode = payload.get("generation_mode", "gemini")
+    if generation_mode not in {"gemini", "ollama_local"} or (
+        generation_mode == "ollama_local"
+        and (
+            payload.get("remote_inference_calls") != 0
+            or payload.get("generation_model") != "qwen3:8b"
+        )
+    ):
+        raise ActionsError("invalid local generation provenance")
     spec = SCENARIOS[scenario]
     if (
         state.status != "awaiting_approval"
@@ -335,6 +463,7 @@ def review_evidence(
         raise ActionsError("proposal checksum, approval binding or validation evidence is invalid")
     return ReviewEvidence(
         scenario=scenario,
+        generation_mode=generation_mode,
         validation_tool=spec.validator,
         execution_id=state.execution_id,
         approval_id=state.approval.id,
@@ -343,4 +472,7 @@ def review_evidence(
         artifact_path=artifact.path,
         content=artifact.content,
         artifact_sha256=artifact.checksum,
+        validation_attempts=len(state.validation_results),
+        validation_passes=sum(result.status == "passed" for result in state.validation_results),
+        retry_count=state.retry_count if "retry_count" in payload["state"] else None,
     )

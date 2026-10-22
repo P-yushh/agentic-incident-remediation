@@ -1,5 +1,6 @@
 """One fresh synthetic incident, with the original checkpoint resumed after review."""
 
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -57,11 +58,19 @@ def prepare_review(
     budget: BudgetedModel,
     provenance: dict[str, str],
     scenario: DemoScenario = DemoScenario.OOM,
+    *,
+    incident_id: UUID | None = None,
+    occurred_at: datetime | None = None,
 ) -> dict[str, Any]:
     """Start from a fresh alert and save review evidence without deciding for the user."""
 
     with TestClient(create_app(RemediationService(workflow))) as client:
-        response = client.post("/api/incidents", json=SCENARIOS[scenario].incident())
+        incident = SCENARIOS[scenario].incident()
+        if incident_id is not None:
+            incident["id"] = str(incident_id)
+        if occurred_at is not None:
+            incident["occurred_at"] = occurred_at.isoformat()
+        response = client.post("/api/incidents", json=incident)
         response.raise_for_status()
         state = AgentState.model_validate(response.json())
         require_pending_review(workflow, state)

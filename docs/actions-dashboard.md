@@ -8,9 +8,72 @@ The Actions console restores the approved workspace prototype: sidebar navigatio
 cards, visual workflow progress, **Investigation / Proposed fix / Activity** tabs, the simulator
 side panel, and a structured review/publication area, all in Sand & Teal. These sections use
 saved run metadata and verified evidence, not the prototype's sample metrics, agent traces,
-diffs or PR numbers. The proposal is the full generated file because no baseline file is
-available. Generate/validate progress is grouped at GitHub job granularity, not invented
+diffs or PR numbers. The proposed fix is a single scrollable full-file code block, without display-mode
+tabs, line numbers or hunk headers. It compares the exact verified proposal against a checked-in
+synthetic reference baseline: red `-` lines are removed, green `+` lines are added, and unchanged
+context stays neutral. All unchanged lines from the start through the end of the file are
+included, not just snippets around edits. The block has a capped height and supports keyboard
+scrolling. Counts appear in the file header. This baseline was not captured from
+the run, a repository file, or a real cluster; provenance and approval policy disclose that limitation.
+The download retains the exact verified content without diff markers. If comparison is
+unavailable, the same block shows the exact file without highlights and makes no diff claim.
+An unchanged proposal also shows the exact file with an explicit no-differences note.
+Generate/validate progress is grouped
+at GitHub job granularity, not invented
 per-agent telemetry. Pause/resume buttons are absent; approval opens GitHub.
+
+The queue shows a short `INC-` alias, title, service/platform, stage and elapsed time. Aliases
+derive from local UUIDs (with collision-aware prefix extension); they do not replace persisted
+identifiers or GitHub run numbers, which remain in provenance. **Proposals** is a real filtered
+workspace showing only verified proposals currently awaiting human review, with a distinct empty state and
+active navigation. Rejected, approved, publishing, completed, cancelled and failed runs are
+excluded; resolving the selected review removes it from this queue on refresh. **Incidents**
+restores all saved runs. The historical-run import form and
+bottom-left account/history copy are removed; existing history and the read-only import API
+remain compatible. Verdict sits below the file: WIP, Awaiting review, Rejected, Failed,
+Cancelled, Approved / PR created, or Publication unverified. A receipt does not establish that
+the PR was merged; post-publication PR review and merge events are not synchronized.
+
+The sun/moon button switches between Sand & Teal and its dark counterpart, with a locally saved
+appearance preference. Repetitive synthetic/demo labels are omitted from the main workspace,
+but the simulator's explicit inference consent, source provenance, reference-baseline disclosure
+and review/safety policy remain accurate. This presentation update does not add live monitoring,
+production readiness, deployment or automatic PR merges.
+
+Validation statistics beside the validator result show recorded tool execution attempts,
+successful results and the execution's reflection/retry count. They come from the verified
+manifest, not a status label or elapsed time. Legacy cached evidence is enriched only by
+re-verifying an available original artifact with identical core review fields. If that artifact
+has expired, counts remain explicitly unknown. These are validator executions, not GitHub job
+reruns. The two-call workflow does not gain extra inference retries from this display.
+
+Tab panels fade in, the simulator drawer transitions in/out, and only the actual active
+workflow phase pulses. Completed/rejected phases do not continue animating. Reduced-motion
+preferences disable animation and transitions. Connection labels/details are removed from
+the main workspace; readiness and errors are presented in the simulator instead.
+The simulator omits provider branding and routine ready-state/approval notices. Its availability
+message appears only while checking or when starting is blocked. The simulator has no technical
+scope preview: it shows the scenario, service and incident, then **Cancel / Simulate**. Removing
+the preview does not remove or change the fixed backend scenario instructions. Copy accurately
+describes a simulated incident, not an injected live-cluster failure. The Simulate button's tooltip
+states the two-call limit, while review policy remains available separately.
+
+### Human rejection versus technical failure
+
+Rejecting a proposal at the `remediation-demo-review` GitHub environment gate may give the
+workflow a raw `failure` conclusion. The dashboard reads the run's native review history:
+an explicit rejection for that environment, a successful prepare job, and a publication job
+that failed without executing any steps produce **Rejected by reviewer**, not **Workflow failed**.
+A red decision card identifies the reviewer, the progress track stops at human review,
+and Activity records the decision. The exact proposal stays available for inspection; no
+publication, merge or deployment is claimed. The raw GitHub conclusion remains in the record.
+
+Technical errors, cancellation, approvals followed by publisher failures, unrelated review
+environments and ambiguous history are not relabelled as rejection. If review history is
+unavailable, a notice explains that failure alone cannot confirm rejection. Already verified
+rejection evidence survives temporary lookup failure. This reads metadata only, never starts
+inference, approves a review or creates a PR. It describes the **pre-publication proposal gate**;
+requests for changes or closing an already-created PR are separate events, not this status.
 
 ## Start the console
 
@@ -46,29 +109,66 @@ The SQLite journal is Git-ignored, owner-readable/writable only, and contains me
 synthetic review evidence, not credentials. Keep it when restarting the app: it is also the
 durable protection against repeating an uncertain dispatch.
 
-## Inspect the existing successful demonstration without inference
+## Temporary experimental Ollama testing
 
-Enter **39124344483** under **Existing GitHub run ID (read-only)** and click **Load existing run**.
-This imports the verified historical run behind [PR #11](https://github.com/P-yushh/agentic-incident-remediation/pull/11).
-It does not start a workflow, call a model, cancel a workflow, approve a review or modify GitHub.
+Start with `agentic-remediation-actions --experimental-ollama` to enable the
+**Ollama · experimental** choice in **Simulate incident → Generation mode**.
+Restart without that flag to disable it again. Gemini remains the default and there is
+no automatic provider fallback. The installed `qwen3:8b` failed the nine-trial reliability
+gate; this opt-in mode is for testing, not a claim that the model is ready for demonstrations.
+
+Ollama runs on the laptop's loopback interface. Choose 2,048, 4,096 or 8,192 output tokens
+per call and a 5-, 10- or 20-minute timeout. Defaults are 8,192 tokens and 10 minutes,
+with a 16,384-token context. These replace the benchmark's 1,200-token/90-second budgets;
+they are not unlimited inference. Model context, RAM, generated file size and GitHub
+input-size limits still apply. Each incident gets at most one planner call and one generator
+call, with no automatic retry, repair, model download, cloud alias or Gemini fallback.
+
+The updated, source-verified workflow must first be published to `main`. Until then the
+simulator explains that the Ollama handoff is unavailable; it does not silently use Gemini
+or consume local inference. On submission the server checks for the installed model without
+warming it up, saves the request intent, and generates in a background worker. The queue shows
+**Generating locally · Ollama** and continues polling without waiting for a GitHub run ID.
+Cancellation may let the current model request finish, but prevents another node call and
+prevents handing that incident to GitHub. An unresolved local run after server restart can
+be cancelled; it is never automatically resumed or regenerated.
+
+Only a bounded, typed synthetic plan/artifact is sent as workflow input, not an executable
+checkpoint or shell command. GitHub replays the two typed stages without hosted inference,
+validates the unchanged artifact in the existing real Docker sandbox, and saves the original
+Redis review checkpoint. The manifest distinguishes local generation and zero remote inference
+calls. PR publication still requires the same explicit human-review environment; no merge or
+deployment is added. Local generation alone is never displayed as a validated proposal.
+Only these fixed synthetic scenarios are supported; inputs become part of a public GitHub run.
+
+Local errors and GitHub job failures remain distinct. Ambiguous dispatches keep the existing
+no-retry lock, and changing the provider, scenario or inference budget requires a new request
+identity. The dashboard does not adjust billing or verify free-tier eligibility.
+
+## Inspect saved runs without inference
+
+Saved incidents load automatically from the local journal, including previously imported runs.
+Select a queue card, or choose **Proposals** to inspect proposals awaiting human review.
+There is no historical-run import form in the interface. Viewing saved runs does not start a
+workflow, call a model, cancel a workflow, approve a review or modify GitHub.
 Imported runs cannot be cancelled from this dashboard. Remote artifacts expire after one day;
 if evidence is unavailable, the UI must not claim validation passed or invent a PR receipt.
 Verified evidence already downloaded into local history remains available after remote expiry.
 
 ## Start a new live demonstration
 
-1. Check the **ACTIONS** banner and readiness message. Readiness verifies the configured public
+1. Open **Simulate incident** and check the readiness message. Readiness verifies the configured public
    repository, active workflow, approved workflow-source digest, required human reviewers and
    repository PR-creation policy. It does **not** check provider billing/quota or prove that the
    credential has dispatch permission.
 2. Click **Simulate incident** and select one of the three allowlisted synthetic scenarios:
    payment-api OOM, queue-worker CrashLoop/configuration reference, or checkout Terraform ingress
    drift. Service/title/details update from the shared scenario catalog and remain read-only.
-   Each run uses only its selected case, not all three. Changing the scenario resets consent.
+   Each run uses only its selected case, not all three.
    Previewing the selector does not call Gemini. New live dispatch stays disabled until the
    matching multi-scenario workflow is published to main; historical OOM evidence remains readable.
-3. Deliberately check the consent box for **at most two Gemini calls**, then click
-   **Start confirmed live run**. The checkbox resets every time. No model request is sent by
+3. Click **Simulate** only when ready (up to two AI calls, indicated by its tooltip). This deliberate button press
+   authorizes that one bounded run; there is no separate checkbox. No model request is sent by
    opening the dashboard, checking readiness, importing history or polling progress.
 4. Follow the selected run. Progress is polled at five-second intervals with error backoff,
    not streamed from a Kubernetes cluster. The current remote job step is shown when available.
@@ -115,9 +215,25 @@ Version-1 historical manifests remain OOM-only. The internal bundle retains `pro
 handoff compatibility even when its contents are Terraform; dashboard downloads use `proposal.tf`.
 
 Failed runs display a known failed job/step label, a conservative failure category, and a link to
-the exact GitHub job where available. Raw job logs and arbitrary annotation messages are not
-downloaded or shown by the controller. A generation failure cannot reliably be called a quota
-error without inspecting logs; the UI therefore lists possible checks without claiming a cause.
+the exact GitHub job where available. Queue failures and human rejection are red. Verdict identifies
+failure during GitHub execution rather than presenting approval instructions as its outcome.
+The numbered failed phase is red; earlier phases are green only when confirmed by job/evidence
+metadata, and later phases are marked not run. Unknown phase/approval progress is not invented.
+
+The preparation adapter records an allowlisted provider failure category before the workflow
+converts exceptions into failed state. The runner emits only `AIR_FAILURE_V1` JSON in a GitHub
+check annotation; bodies, prompts, credentials and raw exception text are never printed. The
+dashboard reads that marker only from the same repository's failed-job check-run URL, rejects
+extra fields/unknown or conflicting codes, and maps it to a fixed public message. Raw job logs
+are not downloaded by the dashboard, and arbitrary annotation text is never displayed. A verified
+HTTP 429 category says **quota or rate limit reached**, not that a daily quota was exhausted.
+Authentication, provider server/network errors and invalid model output are separate categories.
+
+Older runs emitted only a generic failure message. They remain **cause unavailable; quota not
+confirmed**: the missing historical reason cannot be reconstructed by this update. New runner
+diagnostics require publishing this code before they can be emitted on GitHub. Viewing or
+classifying failures does not run inference or retry the failed workflow. Local Ollama fallback
+is not implemented by this failure-display update.
 
 Run `python -m pytest tests/actions` for API and controller regressions. The controller checks run
 the actual JavaScript in Node's isolated deterministic DOM harness (no npm packages or network).
