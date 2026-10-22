@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1140" viewBox="0 0 1600 1140" role="img" aria-labelledby="title description">
+  <title id="title">Core incident remediation workflow</title>
+  <desc id="description">An incident is normalized, planned, converted into a configuration artifact and validated. Failed validation enters bounded reflection and regeneration. Passed validation waits for a checkpointed human approval. Only an approved artifact can be published as a pull request. Rejection and failures stop publication. Configuration validation does not prove runtime recovery.</desc>
+  <defs>
+    <style>
+      text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; }
+      .title { font-size: 42px; font-weight: 650; fill: #203432; letter-spacing: -.8px; }
+      .subtitle { font-size: 23px; fill: #52635f; }
+      .section { font-size: 28px; font-weight: 600; fill: #203432; }
+      .scope { font-size: 19px; fill: #52635f; }
+      .node { fill: #fffefb; stroke: #d4ddd6; stroke-width: 1.5; }
+      .accent { fill: #e2f0ea; stroke: #a8c9be; stroke-width: 1.5; }
+      .support { fill: #eeeae1; stroke: #dad8ce; stroke-width: 1.5; }
+      .stop { fill: #f8e8e6; stroke: #dcb3ad; stroke-width: 1.5; }
+      .heading { font-size: 24px; font-weight: 600; fill: #203432; }
+      .body { font-size: 20px; fill: #52635f; }
+      .label { font-size: 19px; font-weight: 500; fill: #096b66; }
+      .warning { font-size: 19px; font-weight: 500; fill: #8e3c35; }
+      .edge { fill: none; stroke: #096b66; stroke-width: 2.5; stroke-linejoin: round; marker-end: url(#arrow); }
+      .secondary { fill: none; stroke: #8a9891; stroke-width: 2; stroke-dasharray: 7 6; stroke-linejoin: round; marker-end: url(#arrow-muted); }
+      .stop-edge { fill: none; stroke: #b6655c; stroke-width: 2; stroke-linejoin: round; marker-end: url(#arrow-stop); }
+      .rule { stroke: #d9dfd8; stroke-width: 1.5; }
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0 10 5 0 10Z" fill="#096b66"/></marker>
+    <marker id="arrow-muted" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0 10 5 0 10Z" fill="#8a9891"/></marker>
+    <marker id="arrow-stop" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0 10 5 0 10Z" fill="#b6655c"/></marker>
+  </defs>
+  <rect width="1600" height="1140" fill="#f8f5ef"/>
+  <rect x="64" y="52" width="7" height="57" rx="3" fill="#096b66"/>
+  <text x="91" y="87" class="title">Agentic Incident Remediation</text>
+  <text x="92" y="122" class="subtitle">Stateful agents. Validated proposals. Human-reviewed pull requests.</text>
+  <line x1="64" y1="157" x2="1536" y2="157" class="rule"/>
+  <text x="64" y="204" class="section">Core remediation workflow</text>
+  <text x="1536" y="204" text-anchor="end" class="scope">LangGraph orchestration</text>
+
+  <rect x="444" y="235" width="272" height="80" rx="12" class="support"/>
+  <text x="580" y="268" text-anchor="middle" class="heading" style="font-size:21px">Selected LLM adapter</text>
+  <text x="580" y="296" text-anchor="middle" class="body">Structured model output</text>
+  <rect x="824" y="235" width="272" height="80" rx="12" class="support"/>
+  <text x="960" y="268" text-anchor="middle" class="heading" style="font-size:21px">Read-only schema tools</text>
+  <text x="960" y="296" text-anchor="middle" class="body">Shared MCP / local catalog</text>
+  <path d="M580 315V360" class="secondary"/>
+  <path d="M716 275H766V390H824" class="secondary"/>
+  <path d="M960 315V360" class="secondary"/>
+
+  <rect x="64" y="360" width="272" height="116" rx="14" class="node"/>
+  <text x="200" y="399" text-anchor="middle" class="heading">Incident intake</text>
+  <text x="200" y="431" text-anchor="middle" class="body">FastAPI · normalization</text>
+  <text x="200" y="457" text-anchor="middle" class="body">Strict Pydantic contracts</text>
+  <rect x="444" y="360" width="272" height="116" rx="14" class="node"/>
+  <text x="580" y="399" text-anchor="middle" class="heading">Planner</text>
+  <text x="580" y="431" text-anchor="middle" class="body">Ordered remediation plan</text>
+  <text x="580" y="457" text-anchor="middle" class="body">Schema-constrained output</text>
+  <rect x="824" y="360" width="272" height="116" rx="14" class="node"/>
+  <text x="960" y="399" text-anchor="middle" class="heading">Artifact generator</text>
+  <text x="960" y="431" text-anchor="middle" class="body">Kubernetes YAML</text>
+  <text x="960" y="457" text-anchor="middle" class="body">or Terraform HCL</text>
+  <rect x="1204" y="360" width="272" height="116" rx="14" class="accent"/>
+  <text x="1340" y="399" text-anchor="middle" class="heading">Docker validation</text>
+  <text x="1340" y="431" text-anchor="middle" class="body">kubeconform</text>
+  <text x="1340" y="457" text-anchor="middle" class="body">or terraform validate</text>
+  <path d="M336 418H444" class="edge"/>
+  <path d="M716 418H824" class="edge"/>
+  <path d="M1096 418H1204" class="edge"/>
+
+  <rect x="824" y="600" width="272" height="116" rx="14" class="accent"/>
+  <text x="960" y="639" text-anchor="middle" class="heading">Human approval</text>
+  <text x="960" y="671" text-anchor="middle" class="body">Checkpointed interruption</text>
+  <text x="960" y="697" text-anchor="middle" class="body">Approve or reject the artifact</text>
+  <rect x="444" y="600" width="272" height="116" rx="14" class="node"/>
+  <text x="580" y="639" text-anchor="middle" class="heading">Restricted publisher</text>
+  <text x="580" y="671" text-anchor="middle" class="body">Branch + artifact commit</text>
+  <text x="580" y="697" text-anchor="middle" class="body">Idempotent GitHub writes</text>
+  <rect x="64" y="600" width="272" height="116" rx="14" class="accent"/>
+  <text x="200" y="645" text-anchor="middle" class="heading">Remediation PR</text>
+  <text x="200" y="679" text-anchor="middle" class="body">Ready for code review</text>
+  <path d="M1340 476V658H1096" class="edge"/>
+  <text x="1357" y="546" class="label">Passed</text>
+  <path d="M824 658H716" class="edge"/>
+  <text x="770" y="641" text-anchor="middle" class="label">Approve</text>
+  <path d="M444 658H336" class="edge"/>
+
+  <rect x="1204" y="790" width="272" height="96" rx="14" class="support"/>
+  <text x="1340" y="829" text-anchor="middle" class="heading">Bounded reflection</text>
+  <text x="1340" y="861" text-anchor="middle" class="body">Use validator feedback</text>
+  <path d="M1476 418H1536V838H1476" class="edge"/>
+  <text x="1516" y="736" text-anchor="end" class="label">Invalid</text>
+  <path d="M1148 680V635" fill="none" stroke="#f8f5ef" stroke-width="9"/>
+  <path d="M1204 838H1148V522H960V476" class="edge"/>
+  <text x="1131" y="764" text-anchor="end" class="label">Retry available</text>
+  <rect x="1204" y="942" width="272" height="86" rx="14" class="stop"/>
+  <text x="1340" y="977" text-anchor="middle" class="heading" style="font-size:21px">Stop without publishing</text>
+  <text x="1340" y="1007" text-anchor="middle" class="body">Rejected / failed safely</text>
+  <path d="M1340 886V942" class="stop-edge"/>
+  <text x="1322" y="922" text-anchor="end" class="warning">Retry limit reached</text>
+  <path d="M960 716V985H1204" class="stop-edge"/>
+  <text x="978" y="925" class="warning">Reject</text>
+  <text x="64" y="813" class="heading" style="font-size:22px">Durable state across the workflow</text>
+  <text x="64" y="847" class="body">Redis checkpoints persist node state, history and the pending approval.</text>
+  <text x="64" y="881" class="body">Model, tool and runtime errors stop execution; retries have a hard ceiling.</text>
+  <text x="64" y="951" class="scope">A validation pass confirms configuration validity.</text>
+  <text x="64" y="980" class="scope">It does not establish workload recovery or incident resolution.</text>
+  <line x1="64" y1="1066" x2="1536" y2="1066" class="rule"/>
+  <text x="800" y="1110" text-anchor="middle" class="heading" style="font-size:21px">No automatic merge · No infrastructure apply</text>
+</svg>
